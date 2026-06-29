@@ -418,6 +418,111 @@ async def send_gif(chat_id: Union[int, str], gif_id: int, account: str = None) -
         return log_and_format_error("send_gif", e, chat_id=chat_id, gif_id=gif_id)
 
 
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Transcribe Voice Message", openWorldHint=True, readOnlyHint=True
+    )
+)
+@with_account(readonly=True)
+@validate_id("chat_id")
+async def transcribe_voice_message(
+    chat_id: Union[int, str],
+    message_id: int,
+    language: Optional[str] = None,
+    account: str = None,
+) -> str:
+    """
+    Transcribe a voice or audio message to text. Downloads and transcribes automatically
+    using a local Whisper model — no need to download the media separately first.
+    Always use this tool instead of manual download + transcription when you need
+    the text content of a voice/audio message.
+
+    Args:
+        chat_id: The chat ID or username.
+        message_id: The message ID containing a voice/audio message.
+        language: Optional language code hint for transcription (e.g. "ru", "en", "de").
+    """
+    try:
+        import mlx_whisper
+    except ImportError:
+        return json.dumps(
+            {
+                "error": "mlx-whisper not installed. "
+                "Install: uv add mlx-whisper && brew install ffmpeg"
+            }
+        )
+
+    import tempfile
+
+    try:
+        cl = get_client(account)
+        entity = await resolve_entity(chat_id, cl)
+        message = await cl.get_messages(entity, ids=message_id)
+        if not message or not message.media:
+            return json.dumps({"error": f"Message {message_id} has no media."})
+
+        is_voice = (
+            hasattr(message.media, "document")
+            and any(
+                hasattr(attr, "voice") and attr.voice
+                for attr in getattr(message.media.document, "attributes", [])
+            )
+            or hasattr(message.media, "voice")
+        )
+        is_audio = hasattr(message.media, "document") and any(
+            hasattr(attr, "audio") and attr.audio
+            for attr in getattr(message.media.document, "attributes", [])
+        )
+
+        if not is_voice and not is_audio:
+            return json.dumps({"error": f"Message {message_id} is not a voice or audio message."})
+
+        fd, tmp_path = tempfile.mkstemp(suffix=".ogg")
+        os.close(fd)
+        try:
+            try:
+                await cl.download_media(message, file=tmp_path)
+            except Exception as dl_err:
+                return json.dumps(
+                    {"error": f"Failed to download media from message {message_id}: {dl_err}"}
+                )
+
+            if not os.path.exists(tmp_path) or os.path.getsize(tmp_path) == 0:
+                return json.dumps({"error": f"Downloaded file is empty for message {message_id}."})
+
+            transcribe_kwargs = {"path_or_hf_repo": WHISPER_MODEL}
+            if language:
+                transcribe_kwargs["language"] = language
+
+            try:
+                result = await asyncio.to_thread(
+                    mlx_whisper.transcribe, tmp_path, **transcribe_kwargs
+                )
+            except Exception as tr_err:
+                return json.dumps(
+                    {"error": f"Transcription failed for message {message_id}: {tr_err}"}
+                )
+        finally:
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+
+        return json.dumps(
+            {
+                "text": result.get("text", "").strip(),
+                "language": result.get("language"),
+                "duration": result.get("duration"),
+                "message_id": message_id,
+                "chat_id": str(chat_id),
+            },
+            indent=2,
+            default=json_serializer,
+        )
+    except Exception as e:
+        return log_and_format_error(
+            "transcribe_voice_message", e, chat_id=chat_id, message_id=message_id
+        )
+
+
 __all__ = [
     "send_file",
     "send_album",
@@ -429,4 +534,5 @@ __all__ = [
     "send_sticker",
     "get_gif_search",
     "send_gif",
+    "transcribe_voice_message",
 ]

@@ -103,6 +103,9 @@ load_dotenv()
 TELEGRAM_API_ID = int(os.getenv("TELEGRAM_API_ID"))
 TELEGRAM_API_HASH = os.getenv("TELEGRAM_API_HASH")
 
+# Whisper model for local voice transcription (mlx-whisper, Apple Silicon).
+WHISPER_MODEL = os.getenv("WHISPER_MODEL", "mlx-community/whisper-small-mlx")
+
 mcp = FastMCP("telegram")
 
 # Annotate all tool results with audience=["user"] so MCP clients know
@@ -829,6 +832,30 @@ def get_sender_name(message) -> str:
         return sanitize_name(full_name) if full_name else "Unknown"
     else:
         return "Unknown"
+
+
+def get_sender_username(message) -> Optional[str]:
+    """Public @username of the message sender, if any (sanitized)."""
+    sender = getattr(message, "sender", None)
+    username = getattr(sender, "username", None) if sender else None
+    return sanitize_name(username) if username else None
+
+
+def get_sender_info(message) -> str:
+    """Sender display string: name (@username) [id=NNN].
+
+    Always exposes a numeric id (sender or from_id) so a user can be reached via
+    tg://user?id=<id> even when no public @username exists.
+    """
+    name = get_sender_name(message)
+    username = get_sender_username(message)
+    sid = getattr(message, "sender_id", None)
+    suffix = ""
+    if username:
+        suffix += f" (@{username})"
+    if sid:
+        suffix += f" [id={sid}]"
+    return f"{name}{suffix}"
 
 
 def get_engagement_info(message) -> str:
