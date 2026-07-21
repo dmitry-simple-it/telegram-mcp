@@ -243,12 +243,18 @@ async def get_participants(
         cl = get_client(account)
         await ensure_connected(cl)
 
-        # Use iter_participants with offset to fetch only the needed slice,
-        # avoiding O(N) fetching on later pages.
+        # NOTE: Telethon's ChatMethods.iter_participants() does not accept an
+        # `offset` keyword argument (removed upstream long before pinned
+        # 1.42.0 here), so passing it always raised TypeError regardless of
+        # the requested page. Emulate pagination by fetching the first
+        # `offset + page_size` participants and slicing the requested page
+        # client-side instead.
         offset = (page - 1) * page_size
-        participants = []
-        async for participant in cl.iter_participants(chat_id, limit=page_size, offset=offset):
-            participants.append(participant)
+        fetch_limit = offset + page_size
+        all_participants = []
+        async for participant in cl.iter_participants(chat_id, limit=fetch_limit):
+            all_participants.append(participant)
+        participants = all_participants[offset : offset + page_size]
 
         if not participants:
             return format_tool_result([])
