@@ -270,7 +270,7 @@ async def get_last_interaction(contact_id: Union[int, str], account: Optional[st
                 {
                     "date": msg.date,
                     "from": "You" if msg.out else contact_name,
-                    "text": sanitize_user_content(msg.message),
+                    "text": get_message_text(msg),
                 }
             )
 

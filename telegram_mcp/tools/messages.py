@@ -106,7 +106,7 @@ def message_to_dict(msg) -> dict:
     if getattr(msg, "out", False):
         d["out"] = True
 
-    text = sanitize_user_content(msg.message) if getattr(msg, "message", None) else ""
+    text = get_message_text(msg)
     if text:
         d["text"] = text
 
@@ -213,7 +213,7 @@ def format_message_line(msg) -> str:
     if engagement_info:
         parts.append(engagement_info)
 
-    raw = sanitize_user_content(msg.message) if getattr(msg, "message", None) else ""
+    raw = get_message_text(msg)
     safe_text = raw.replace("\n", "\\n") if raw else "[empty]"
     return " | ".join(parts) + f" | Message: {safe_text}"
 
@@ -777,7 +777,7 @@ async def list_messages(
                 "id": msg.id,
                 "sender": get_sender_info(msg),
                 "date": msg.date,
-                "text": sanitize_user_content(msg.message),
+                "text": get_message_text(msg),
             }
             grouped_id = getattr(msg, "grouped_id", None)
             if grouped_id is not None:
@@ -843,7 +843,7 @@ async def get_message_context(
                 "sender": sender_name,
                 "date": msg.date,
                 "is_target": msg.id == message_id,
-                "text": sanitize_user_content(msg.message),
+                "text": get_message_text(msg),
             }
             if getattr(msg, "sender_id", None):
                 record["sender_id"] = msg.sender_id
@@ -862,7 +862,7 @@ async def get_message_context(
                     if replied_msg:
                         replied_record = {
                             "sender": get_sender_name(replied_msg),
-                            "text": sanitize_user_content(replied_msg.message),
+                            "text": get_message_text(replied_msg),
                         }
                         if getattr(replied_msg, "sender_id", None):
                             replied_record["sender_id"] = replied_msg.sender_id
@@ -1315,7 +1315,7 @@ async def search_messages(
                 "id": msg.id,
                 "sender": get_sender_info(msg),
                 "date": msg.date,
-                "text": sanitize_user_content(msg.message),
+                "text": get_message_text(msg),
             }
             if msg.reply_to and msg.reply_to.reply_to_msg_id:
                 record["reply_to"] = msg.reply_to.reply_to_msg_id
@@ -1365,7 +1365,7 @@ async def search_global(
                     "id": msg.id,
                     "sender": get_sender_info(msg),
                     "date": msg.date,
-                    "text": sanitize_user_content(msg.message),
+                    "text": get_message_text(msg),
                 }
             )
 
@@ -1431,7 +1431,7 @@ async def get_pinned_messages(chat_id: Union[int, str], account: str = None) -> 
                 "id": msg.id,
                 "sender": get_sender_info(msg),
                 "date": msg.date,
-                "text": sanitize_user_content(msg.message),
+                "text": get_message_text(msg),
             }
             if msg.reply_to and msg.reply_to.reply_to_msg_id:
                 record["reply_to"] = msg.reply_to.reply_to_msg_id

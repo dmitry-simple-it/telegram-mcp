@@ -791,6 +791,114 @@ async def resolve_input_entity(identifier: Union[int, str], client=None) -> Any:
     ) from last_error
 
 
+def render_rich_text(node) -> str:
+    """Render a Telethon RichText TL node (TextPlain/TextBold/TextConcat/...) to
+    a Markdown-ish plain string.
+
+    Telegram sends some bot-authored messages (e.g. long formatted reports) as a
+    `rich_message` (TL `RichMessage`) instead of plain `message` text once the
+    client's negotiated MTProto layer is new enough to know about it. Older
+    Telethon versions request an older layer and Telegram falls back to
+    `MessageMediaUnsupported`, which is why this can look "empty" until
+    Telethon is upgraded (see docs/telethon-upgrade note).
+
+    Unknown node types fall back to a generic recursive best-effort extraction
+    so future TL additions degrade gracefully instead of vanishing silently.
+    """
+    if node is None:
+        return ""
+    cls = type(node).__name__
+    try:
+        if cls == "TextPlain":
+            return node.text
+        if cls == "TextBold":
+            return f"**{render_rich_text(node.text)}**"
+        if cls == "TextItalic":
+            return f"_{render_rich_text(node.text)}_"
+        if cls == "TextFixed":
+            return f"`{render_rich_text(node.text)}`"
+        if cls == "TextUnderline":
+            return f"__{render_rich_text(node.text)}__"
+        if cls == "TextStrike":
+            return f"~~{render_rich_text(node.text)}~~"
+        if cls == "TextConcat":
+            return "".join(render_rich_text(t) for t in node.texts)
+        if cls in ("TextUrl", "TextEmail", "TextAnchor", "TextSubscript", "TextSuperscript", "TextMarked", "TextPhone", "TextImage"):
+            inner = render_rich_text(getattr(node, "text", None))
+            url = getattr(node, "url", None)
+            return f"[{inner}]({url})" if url else inner
+        if hasattr(node, "text"):
+            return render_rich_text(node.text)
+        if hasattr(node, "texts"):
+            return "".join(render_rich_text(t) for t in node.texts)
+    except Exception:
+        pass
+    return ""
+
+
+def render_page_block(block) -> str:
+    """Render a single Telegram `PageBlock*` TL node to a Markdown-ish line."""
+    cls = type(block).__name__
+    try:
+        if cls in ("PageBlockParagraph",):
+            return render_rich_text(block.text)
+        if cls in ("PageBlockHeading2", "PageBlockSubtitle"):
+            return f"## {render_rich_text(block.text)}"
+        if cls in ("PageBlockHeading", "PageBlockTitle"):
+            return f"# {render_rich_text(block.text)}"
+        if cls == "PageBlockBlockquote":
+            return f"> {render_rich_text(block.text)}"
+        if cls == "PageBlockPreformatted":
+            return f"```\n{render_rich_text(block.text)}\n```"
+        if cls == "PageBlockDivider":
+            return "---"
+        if cls == "PageBlockList":
+            lines = []
+            for item in getattr(block, "items", None) or []:
+                lines.append(f"- {render_rich_text(getattr(item, 'text', item))}")
+            return "\n".join(lines)
+        if cls == "PageBlockOrderedList":
+            lines = []
+            for i, item in enumerate(getattr(block, "items", None) or [], 1):
+                lines.append(f"{i}. {render_rich_text(getattr(item, 'text', item))}")
+            return "\n".join(lines)
+        if cls == "PageBlockTable":
+            lines = [render_rich_text(block.title)] if getattr(block, "title", None) else []
+            for row in getattr(block, "rows", None) or []:
+                cells = [render_rich_text(getattr(c, "text", None)) for c in getattr(row, "cells", None) or []]
+                lines.append(" | ".join(cells))
+            return "\n".join(lines)
+        if hasattr(block, "text"):
+            return render_rich_text(block.text)
+    except Exception:
+        pass
+    return ""
+
+
+def render_rich_message(rich) -> str:
+    """Render a Telethon `RichMessage` (message.rich_message) into plain text.
+
+    Returns "" if there is nothing to render (no rich_message, or empty).
+    """
+    if rich is None:
+        return ""
+    blocks = getattr(rich, "blocks", None) or []
+    rendered = [render_page_block(b) for b in blocks]
+    return "\n\n".join(line for line in rendered if line)
+
+
+def get_message_text(message) -> str:
+    """Sanitized display text for a message: plain `message`, falling back to
+    a rendered `rich_message` when the plain text is empty (see
+    `render_rich_message`)."""
+    text = message.message if getattr(message, "message", None) else ""
+    if not text:
+        rich = getattr(message, "rich_message", None)
+        if rich is not None:
+            text = render_rich_message(rich)
+    return sanitize_user_content(text) if text else ""
+
+
 def format_message(message) -> Dict[str, Any]:
     """Helper function to format message information consistently.
 
@@ -799,7 +907,7 @@ def format_message(message) -> Dict[str, Any]:
     result = {
         "id": message.id,
         "date": message.date.isoformat(),
-        "text": sanitize_user_content(message.message),
+        "text": get_message_text(message),
     }
 
     if message.from_id:
