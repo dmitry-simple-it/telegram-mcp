@@ -112,7 +112,7 @@ async def send_album(
 
 
 @mcp.tool(
-    annotations=ToolAnnotations(title="Download Media", openWorldHint=True, destructiveHint=True)
+    annotations=ToolAnnotations(title="Download Media", openWorldHint=True, readOnlyHint=True)
 )
 @with_account(readonly=False)
 @validate_id("chat_id")
