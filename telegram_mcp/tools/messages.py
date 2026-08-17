@@ -1,6 +1,9 @@
 """Messages MCP tools."""
 
+import secrets
+
 from telegram_mcp.runtime import *
+from telethon.tl.types import InputMediaTodo, TodoList, TodoItem
 
 
 def get_media_label(msg) -> str:
@@ -275,6 +278,85 @@ async def send_message(
         return "Message sent successfully."
     except Exception as e:
         return log_and_format_error("send_message", e, chat_id=chat_id)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(title="Send Checklist", openWorldHint=True, destructiveHint=True)
+)
+@with_account(readonly=False)
+@validate_id("chat_id")
+async def send_checklist(
+    chat_id: Union[int, str],
+    title: str,
+    items: List[str],
+    others_can_append: bool = False,
+    others_can_complete: bool = True,
+    account: str = None,
+) -> str:
+    """
+    Send a native tappable Telegram checklist (to-do list) to a chat.
+
+    Unlike send_message, this creates a real Telegram checklist object that the
+    recipient can check off item-by-item directly in the Telegram UI (not plain text).
+
+    Args:
+        chat_id: The ID or username of the chat.
+        title: Checklist title (max 255 characters).
+        items: List of checklist item strings (1-30 items, Telegram's hard limit).
+        others_can_append: Whether other chat members can add new items.
+        others_can_complete: Whether other chat members can check/uncheck items.
+
+    Note: Creating checklists may require a Telegram Premium subscription on the
+    sending account. If the API rejects the request for that reason, the error
+    message will say so explicitly.
+    """
+    try:
+        if not title or not title.strip():
+            return "Error: title must not be empty."
+        if len(title) > 255:
+            return f"Error: title too long ({len(title)} chars, max 255)."
+        if not items:
+            return "Error: items must be a non-empty list (1-30 items)."
+        if len(items) > 30:
+            return f"Error: too many items ({len(items)}), Telegram allows a maximum of 30 per checklist."
+
+        cl = get_client(account)
+        entity = await resolve_entity(chat_id, cl)
+
+        todo_list = TodoList(
+            title=TextWithEntities(text=title, entities=[]),
+            list=[
+                TodoItem(id=i + 1, title=TextWithEntities(text=item_text, entities=[]))
+                for i, item_text in enumerate(items)
+            ],
+            others_can_append=others_can_append,
+            others_can_complete=others_can_complete,
+        )
+        media = InputMediaTodo(todo=todo_list)
+
+        result = await cl(
+            functions.messages.SendMediaRequest(
+                peer=entity,
+                media=media,
+                message="",
+                random_id=secrets.randbits(63),
+            )
+        )
+        message_id = None
+        for update in getattr(result, "updates", []) or []:
+            mid = getattr(update, "id", None) or getattr(
+                getattr(update, "message", None), "id", None
+            )
+            if mid:
+                message_id = mid
+                break
+        if message_id:
+            return f"Checklist sent successfully (message id {message_id}, {len(items)} item(s))."
+        return f"Checklist sent successfully ({len(items)} item(s))."
+    except Exception as e:
+        return log_and_format_error(
+            "send_checklist", e, chat_id=chat_id, title=title, item_count=len(items or [])
+        )
 
 
 @mcp.tool(
