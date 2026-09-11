@@ -64,14 +64,22 @@ def get_media_label(msg) -> str:
 
 
 def _inline_button_texts(msg):
-    """Inline button texts of the message (flat list), [] if none."""
+    """Inline button texts of the message (flat list), [] if none.
+
+    URL buttons (e.g. "Открыть отчёт" -> https://...) get their destination
+    appended as "text (url)" — the URL is otherwise invisible (it lives on
+    the button object, not in msg.message), same class of loss as text-link
+    entities (see `render_text_entities` in runtime.py).
+    """
     out = []
     try:
         for row in getattr(msg, "buttons", None) or []:
             for b in row:
                 t = getattr(b, "text", None)
-                if t:
-                    out.append(t)
+                if not t:
+                    continue
+                u = getattr(b, "url", None)
+                out.append(f"{t} ({u})" if u else t)
     except Exception:
         pass
     return out

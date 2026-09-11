@@ -44,6 +44,7 @@ from telethon.tl.types import (
 import re
 from functools import wraps
 import telethon.errors.rpcerrorlist
+from telethon.extensions import markdown as _tl_markdown
 from sanitize import sanitize_user_content, sanitize_name, sanitize_dict, format_tool_result
 from telegram_mcp.client_identity import client_identity_kwargs
 
@@ -887,12 +888,55 @@ def render_rich_message(rich) -> str:
     return "\n\n".join(line for line in rendered if line)
 
 
+def render_text_entities(text: str, entities) -> str:
+    """Surface URLs (and named-mention ids) that Telegram encodes as
+    *invisible* entities rather than literal text.
+
+    `MessageEntityTextUrl` is what a Telegram client renders as clickable
+    text with a hidden href (e.g. the word "Текст" linking to a Я.Диск
+    file) — reading only `message.message` silently drops the URL, which is
+    exactly the bug this fixes (link text stayed, destination vanished).
+    `MessageEntityMentionName` is the analogous case for mentions of users
+    without a public @username (Telegram gives a numeric id instead of a
+    clickable @handle).
+
+    Intentionally narrow: only entities that carry a URL are rewritten, as
+    Markdown `[visible text](url)` (same style `render_rich_text` already
+    uses for RichMessage TextUrl nodes, for consistency). Pure style
+    entities (bold/italic/code/...) are left untouched — this is NOT a full
+    Markdown re-serialization of the message, just recovering otherwise-lost
+    URLs. Delegates the actual UTF-16-offset-aware string surgery to
+    Telethon's own `markdown.unparse` (entities are addressed in UTF-16 code
+    units, which don't line up 1:1 with Python string indices for
+    astral-plane characters like emoji — reimplementing that by hand is a
+    trap).
+    """
+    if not text or not entities:
+        return text
+    url_entities = [
+        e
+        for e in entities
+        if isinstance(e, (types.MessageEntityTextUrl, types.MessageEntityMentionName))
+    ]
+    if not url_entities:
+        return text
+    try:
+        return _tl_markdown.unparse(text, url_entities)
+    except Exception:
+        return text
+
+
 def get_message_text(message) -> str:
-    """Sanitized display text for a message: plain `message`, falling back to
-    a rendered `rich_message` when the plain text is empty (see
-    `render_rich_message`)."""
+    """Sanitized display text for a message: plain `message` with hidden
+    text-link/mention URLs surfaced inline (see `render_text_entities`),
+    falling back to a rendered `rich_message` when the plain text is empty
+    (see `render_rich_message`)."""
     text = message.message if getattr(message, "message", None) else ""
-    if not text:
+    if text:
+        entities = getattr(message, "entities", None)
+        if entities:
+            text = render_text_entities(text, entities)
+    else:
         rich = getattr(message, "rich_message", None)
         if rich is not None:
             text = render_rich_message(rich)

@@ -7,7 +7,15 @@ import pytest
 from mcp.server.fastmcp import FastMCP
 from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData, ToolAnnotations
-from telethon.tl.types import Channel, Chat, PeerUser, User
+from telethon.tl.types import (
+    Channel,
+    Chat,
+    MessageEntityBold,
+    MessageEntityMentionName,
+    MessageEntityTextUrl,
+    PeerUser,
+    User,
+)
 
 import main
 from telegram_mcp import runtime
@@ -615,6 +623,65 @@ def test_message_formatting_sender_and_engagement_helpers():
     assert runtime.get_engagement_dict(message) == {"views": 10, "forwards": 2, "reactions": 3}
     assert runtime.get_engagement_info(SimpleNamespace()) == ""
     assert runtime.get_engagement_dict(SimpleNamespace()) is None
+
+
+def test_get_message_text_surfaces_text_url_entities():
+    # Repro of the 2026-09-11 bug: a message where "Текст" and "Видео" are
+    # clickable words (MessageEntityTextUrl) pointing at yadi.sk, but the
+    # literal message text has no URL at all — reading message.message alone
+    # silently drops both links.
+    text = "первые 20-30 минут\n\nТекст \nВидео"
+    entities = [
+        MessageEntityTextUrl(offset=20, length=5, url="https://yadi.sk/i/text-example"),
+        MessageEntityTextUrl(offset=27, length=5, url="https://yadi.sk/i/video-example"),
+    ]
+    message = SimpleNamespace(message=text, entities=entities, rich_message=None)
+
+    result = runtime.get_message_text(message)
+
+    assert "https://yadi.sk/i/text-example" in result
+    assert "https://yadi.sk/i/video-example" in result
+    assert "[Текст](https://yadi.sk/i/text-example)" in result
+    assert "[Видео](https://yadi.sk/i/video-example)" in result
+
+
+def test_get_message_text_surfaces_mention_name_entities():
+    text = "спроси у Наташи"
+    entities = [MessageEntityMentionName(offset=9, length=6, user_id=555)]
+    message = SimpleNamespace(message=text, entities=entities, rich_message=None)
+
+    result = runtime.get_message_text(message)
+
+    assert "[Наташи](tg://user?id=555)" in result
+
+
+def test_get_message_text_leaves_style_only_entities_untouched():
+    # Bold/italic/etc. are NOT part of this fix's scope — only entities that
+    # carry a URL are rewritten. Style entities must pass through unchanged
+    # (no spurious markdown markers added).
+    text = "важное слово"
+    entities = [MessageEntityBold(offset=0, length=6)]
+    message = SimpleNamespace(message=text, entities=entities, rich_message=None)
+
+    assert runtime.get_message_text(message) == text
+
+
+def test_render_text_entities_handles_surrogate_pair_offsets():
+    # Entity offsets are UTF-16 code units; an emoji before the link text
+    # shifts the byte offset relative to plain Python string indexing for
+    # astral-plane characters. Must not mangle the emoji or misplace the link.
+    text = "\U0001F600 Текст"  # grinning face emoji (2 UTF-16 units) + " Текст"
+    entities = [MessageEntityTextUrl(offset=3, length=5, url="https://yadi.sk/i/x")]
+
+    result = runtime.render_text_entities(text, entities)
+
+    assert result == "\U0001F600 [Текст](https://yadi.sk/i/x)"
+
+
+def test_get_message_text_ignores_entities_without_url():
+    text = "plain text"
+    message = SimpleNamespace(message=text, entities=None, rich_message=None)
+    assert runtime.get_message_text(message) == text
 
 
 def test_log_and_format_error_returns_custom_and_generated_messages(caplog):
