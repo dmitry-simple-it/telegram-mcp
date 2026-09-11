@@ -86,6 +86,12 @@ telegram_mcp/
 - **File security** — allowed-roots model (`_resolve_readable_file_path` / `_resolve_writable_file_path`,
   `_ensure_allowed_roots`). Roots come from the MCP client; server-side CLI roots are an opt-in fallback
   (`TELEGRAM_ALLOW_SERVER_ROOTS_FALLBACK=true` + positional CLI args). This replaces the old cowork path hack.
+  **[fork] Stateless HTTP = server roots.** `list_roots` is only sent when the client declared the `roots`
+  capability in this session (`_client_declared_roots`); under `stateless_http=True` no session sees
+  `initialize`, so the positional CLI roots from the launchd plist apply directly. Never call
+  `ctx.session.list_roots()` unguarded there: it is routed to a GET stream the per-request transport
+  lacks and hangs forever (incident 2026-09-11, `download_media`). `list_roots` is also capped at
+  `ROOTS_REQUEST_TIMEOUT_SECONDS`.
 
 ### Tool registration pattern
 

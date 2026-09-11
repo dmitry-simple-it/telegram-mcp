@@ -480,6 +480,14 @@ Allowed roots can come from:
 Security behavior:
 
 - Client MCP Roots replace server CLI roots when available.
+- `roots/list` is only sent to clients that declared the `roots` capability in
+  the current MCP session. Under stateless Streamable HTTP
+  (`MCP_TRANSPORT=http`, `stateless_http=True`) each request is its own session
+  that never sees `initialize`, so the server CLI roots apply directly -- the
+  server, not the client, decides the roots. (Sending `roots/list` there would
+  hang: it is routed to a standalone GET stream that a per-request transport
+  does not have.) A client that declared roots but does not answer within
+  10 s is treated like an unexpected `list_roots` failure (see below).
 - Some clients (notably Cursor) return workspace roots as bare absolute paths
   instead of `file://` URIs. That breaks MCP SDK validation of `list_roots`;
   the server recovers those absolute paths from the validation error so

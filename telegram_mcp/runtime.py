@@ -19,7 +19,14 @@ from urllib.parse import unquote, urlparse
 # Third-party libraries
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP, Context, Image
-from mcp.types import Annotations, ImageContent, TextContent, ToolAnnotations
+from mcp.types import (
+    Annotations,
+    ClientCapabilities,
+    ImageContent,
+    RootsCapability,
+    TextContent,
+    ToolAnnotations,
+)
 from mcp.shared.exceptions import McpError
 from pythonjsonlogger import jsonlogger
 from telethon import TelegramClient, functions, types, utils
@@ -717,6 +724,9 @@ MAX_FILE_BYTES: dict[str, int] = {
     "edit_chat_photo": 50 * 1024 * 1024,
 }
 ROOTS_UNSUPPORTED_ERROR_CODES = {-32601}
+# Upper bound for a roots/list round-trip. The SDK waits forever by default, so
+# a client that never answers would otherwise hang every file-path tool call.
+ROOTS_REQUEST_TIMEOUT_SECONDS = 10.0
 ROOTS_STATUS_READY = "ready"
 ROOTS_STATUS_NOT_CONFIGURED = "not_configured"
 ROOTS_STATUS_UNSUPPORTED_FALLBACK = "unsupported_fallback"
@@ -1827,6 +1837,31 @@ def _server_roots_fallback_enabled(value: Optional[str] = None) -> bool:
     return _parse_bool_env(raw_value, False)
 
 
+def _client_declared_roots(ctx: Context) -> bool:
+    """Whether the client declared the Roots capability in this MCP session.
+
+    The MCP spec only allows ``roots/list`` towards clients that advertised
+    ``roots`` in ``initialize``. Under stateless Streamable HTTP
+    (``FastMCP(stateless_http=True)``) every POST gets a fresh session that
+    never sees ``initialize``, so the client's capabilities are unknown. Worse,
+    ``list_roots()`` carries no related request id, so the transport routes it
+    to the standalone GET stream -- which a per-request stateless transport
+    does not have. The request is silently dropped and the tool call waits
+    forever. Treat "not declared" as "roots unsupported": use server CLI roots.
+
+    Sessions without ``check_client_capability`` (test doubles, custom
+    transports) keep the previous behavior and are asked via ``list_roots``.
+    """
+    try:
+        check = getattr(ctx.session, "check_client_capability", None)
+        if not callable(check):
+            return True
+        return bool(check(ClientCapabilities(roots=RootsCapability())))
+    except Exception:
+        # Let the list_roots path below surface/handle the failure as before.
+        return True
+
+
 async def _get_effective_allowed_roots_with_status(
     ctx: Optional[Context],
 ) -> tuple[List[Path], str]:
@@ -1836,8 +1871,15 @@ async def _get_effective_allowed_roots_with_status(
             return fallback_roots, ROOTS_STATUS_READY
         return [], ROOTS_STATUS_NOT_CONFIGURED
 
+    if not _client_declared_roots(ctx):
+        if fallback_roots:
+            return fallback_roots, ROOTS_STATUS_UNSUPPORTED_FALLBACK
+        return [], ROOTS_STATUS_NOT_CONFIGURED
+
     try:
-        list_roots_result = await ctx.session.list_roots()
+        list_roots_result = await asyncio.wait_for(
+            ctx.session.list_roots(), timeout=ROOTS_REQUEST_TIMEOUT_SECONDS
+        )
     except Exception as error:
         recovered_roots = _coerce_paths_from_list_roots_validation_error(error)
         if recovered_roots:
