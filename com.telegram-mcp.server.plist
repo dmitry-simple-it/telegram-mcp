@@ -11,13 +11,14 @@
         <string>__PROJECT_PATH__</string>
         <string>run</string>
         <string>main.py</string>
+        <string>__HOME__/Downloads</string>
     </array>
     <key>WorkingDirectory</key>
     <string>__PROJECT_PATH__</string>
     <key>EnvironmentVariables</key>
     <dict>
         <key>MCP_TRANSPORT</key>
-        <string>sse</string>
+        <string>http</string>
         <key>MCP_PORT</key>
         <string>8765</string>
         <key>MCP_HOST</key>

@@ -18,7 +18,8 @@ uv sync
 ### Run the MCP server
 ```bash
 uv run main.py                                       # stdio transport (default)
-MCP_TRANSPORT=sse MCP_PORT=8765 uv run main.py       # SSE transport (HTTP)  [fork]
+MCP_TRANSPORT=http MCP_PORT=8765 uv run main.py      # Streamable HTTP transport, endpoint /mcp
+MCP_TRANSPORT=sse MCP_PORT=8765 uv run main.py       # legacy SSE transport (HTTP), endpoint /sse  [fork]
 uv run main.py ~/Downloads                           # positional args = server-side allowed roots
 ```
 
@@ -117,10 +118,20 @@ Validates ID params before the tool runs. Accepts integer, numeric string, or us
 ### Transport modes
 
 - **stdio** (default) — each MCP client spawns its own process → its own Telegram session.
-- **SSE** [fork] — `run_sse_async()` on `MCP_HOST:MCP_PORT`. **One long-lived process holds a single
-  Telegram connection while multiple local MCP clients (Claude Code via mcp-remote, Claude Desktop)
-  attach over HTTP.** This avoids one Telethon session per client, which Telegram throttles/flags.
-  In production this runs under launchd (`com.telegram-mcp.server`, `:8765`).
+- **Streamable HTTP** (`MCP_TRANSPORT=http`, endpoint `/mcp`) — **production default.**
+  `run_streamable_http_async()` on `MCP_HOST:MCP_PORT`, `FastMCP(..., stateless_http=True)`. One
+  long-lived process holds a single Telegram connection while multiple local MCP clients (Claude
+  Code natively, Claude Desktop via `mcp-remote`) attach over HTTP — avoids one Telethon session per
+  client, which Telegram throttles/flags. `stateless_http=True` means a client's next call after a
+  server restart just works instead of failing with "No valid session ID provided" — this is what
+  fixed the SSE transport's long-standing "clients need a manual `/mcp` reconnect after every daemon
+  restart" pain point (SSE keeps per-connection session state; streamable HTTP with
+  `stateless_http=True` doesn't). In production this runs under launchd (`com.telegram-mcp.server`,
+  `:8765`).
+- **SSE** [fork] (`MCP_TRANSPORT=sse`, endpoint `/sse`) — `run_sse_async()`, kept only for clients
+  that can't speak streamable HTTP. Same single-shared-connection design as above, but each client
+  reconnect after a server restart needs a fresh `session_id` (client-side reconnect), which is why
+  it was replaced as the default.
 
 ## Fork-specific tools / features
 
@@ -129,7 +140,7 @@ Validates ID params before the tool runs. Accepts integer, numeric string, or us
 - **`@username` + `id` in listings** — `get_sender_info()` / `get_sender_username()` thread the sender's
   public `@username` and numeric `sender_id` through `message_to_dict`, `format_message_line`,
   `get_message_context`, search / pinned / date-range, and participant/admin/banned listings.
-- **SSE transport** — see Transport modes above.
+- **SSE transport** (legacy fallback) — see Transport modes above; production default is Streamable HTTP.
 
 ## Configuration
 
@@ -143,9 +154,9 @@ Environment variables (via `.env`):
 | `TELEGRAM_SESSION_NAME` | One of two | File-based session name (alternative) |
 | `TELEGRAM_SESSION_STRING_<LABEL>` | No | Per-account session for multi-account mode |
 | `WHISPER_MODEL` | No | mlx-whisper model for transcription (default `mlx-community/whisper-small-mlx`) [fork] |
-| `MCP_TRANSPORT` | No | `stdio` (default) or `sse` |
-| `MCP_HOST` | No | SSE host (default `127.0.0.1`) |
-| `MCP_PORT` | No | SSE port (default `8765`) |
+| `MCP_TRANSPORT` | No | `stdio` (default), `http` (production, Streamable HTTP, endpoint `/mcp`), or `sse` (legacy, endpoint `/sse`) |
+| `MCP_HOST` | No | HTTP/SSE host (default `127.0.0.1`) |
+| `MCP_PORT` | No | HTTP/SSE port (default `8765`) |
 | `TELEGRAM_MCP_TZ` | No | IANA timezone for timestamps in results (default: the machine's local zone) [fork] |
 | `TELEGRAM_ALLOW_SERVER_ROOTS_FALLBACK` | No | Allow file tools to fall back to CLI-provided roots when the client declares none |
 
@@ -160,8 +171,13 @@ Environment variables (via `.env`):
 ## Production deployment (Simple IT)
 
 - Runs under launchd: `~/Library/LaunchAgents/com.telegram-mcp.server.plist`
-  (`uv --directory ~/Projects/telegram-mcp run main.py ~/Downloads`, SSE on `:8765`, `KeepAlive=true`).
-- Restart: `launchctl kickstart -k gui/$(id -u)/com.telegram-mcp.server`
-  (full stop needs `launchctl bootout` because of `KeepAlive`).
-- Claude Code connects through an `mcp-remote` proxy to the SSE endpoint; after a server restart,
-  restart Claude Code so the proxy reconnects.
+  (`uv --directory ~/Projects/telegram-mcp run main.py ~/Downloads`, Streamable HTTP on `:8765`
+  (`MCP_TRANSPORT=http`), `KeepAlive=true`). Managed via `./telegram-mcp.sh
+  install|uninstall|start|stop|restart|status|logs|health`.
+- Restart: `launchctl kickstart -k gui/$(id -u)/com.telegram-mcp.server` or `./telegram-mcp.sh
+  restart` (full stop needs `launchctl bootout` because of `KeepAlive`).
+- Claude Code connects natively (`"type": "http"`, `url` ending in `/mcp`, in `~/.claude.json`);
+  Claude Desktop connects through an `mcp-remote` proxy pointed at the same `/mcp` URL. Because the
+  server is `stateless_http=True`, clients survive a server restart without reconnecting — this
+  replaced the legacy SSE transport specifically to remove the "reconnect every client after every
+  daemon restart" step.
