@@ -12,6 +12,7 @@
         <string>run</string>
         <string>main.py</string>
         <string>__HOME__/Downloads</string>
+        <string>__HOME__/Projects/simple-seller-ai</string>
     </array>
     <key>WorkingDirectory</key>
     <string>__PROJECT_PATH__</string>

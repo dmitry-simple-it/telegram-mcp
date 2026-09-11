@@ -177,9 +177,14 @@ Environment variables (via `.env`):
 ## Production deployment (Simple IT)
 
 - Runs under launchd: `~/Library/LaunchAgents/com.telegram-mcp.server.plist`
-  (`uv --directory ~/Projects/telegram-mcp run main.py ~/Downloads`, Streamable HTTP on `:8765`
-  (`MCP_TRANSPORT=http`), `KeepAlive=true`). Managed via `./telegram-mcp.sh
+  (`uv --directory ~/Projects/telegram-mcp run main.py ~/Downloads ~/Projects/simple-seller-ai`,
+  Streamable HTTP on `:8765` (`MCP_TRANSPORT=http`), `KeepAlive=true`). Managed via `./telegram-mcp.sh
   install|uninstall|start|stop|restart|status|logs|health`.
+- **Allowed roots are set by the server**, i.e. by the positional args in the plist: `~/Downloads`
+  (first = where relative paths and default downloads land: `~/Downloads/downloads/`) and the
+  Razum workspace `~/Projects/simple-seller-ai` (its `wt-*` worktrees and `.tg-tmp/`). Clients
+  cannot widen them over stateless HTTP. Do not add `~` or all of `~/Projects`. Edit the template
+  `com.telegram-mcp.server.plist` too, or `install` silently drops a hand-added root.
 - Restart: `launchctl kickstart -k gui/$(id -u)/com.telegram-mcp.server` or `./telegram-mcp.sh
   restart` (full stop needs `launchctl bootout` because of `KeepAlive`).
 - Claude Code connects natively (`"type": "http"`, `url` ending in `/mcp`, in `~/.claude.json`);
