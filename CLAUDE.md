@@ -74,6 +74,12 @@ telegram_mcp/
   `get_client(account)` and `@with_account(readonly=...)` give tools single- or multi-account behavior.
   StringSession takes priority over a file session when both are set.
 - **Connection** — `ensure_connected()` / `_force_reconnect()` verify a live connection and reconnect on failure.
+- **Timestamps [fork]** — every datetime leaving the server goes through `telegram_mcp/timefmt.py`
+  (`to_local_iso()`), wired into both JSON serializers (`runtime.json_serializer`,
+  `sanitize._json_default`) and the few explicit `.isoformat()` call sites. Telegram returns UTC;
+  results carry the machine's local time with the offset kept in the string
+  (`2026-09-04T15:07:35+03:00`), so a model reading them cannot mistake UTC for wall-clock time.
+  `TELEGRAM_MCP_TZ` pins a zone explicitly. Never emit a raw Telethon datetime — use `to_local_iso()`.
 - **Helpers** — `format_message()`, `get_sender_name()`, **`get_sender_info()` / `get_sender_username()` [fork]**
   (expose `@username` + numeric id in listings), `get_engagement_*`, `resolve_entity()`, `sanitize_*` (from `sanitize.py`).
 - **File security** — allowed-roots model (`_resolve_readable_file_path` / `_resolve_writable_file_path`,
@@ -140,6 +146,7 @@ Environment variables (via `.env`):
 | `MCP_TRANSPORT` | No | `stdio` (default) or `sse` |
 | `MCP_HOST` | No | SSE host (default `127.0.0.1`) |
 | `MCP_PORT` | No | SSE port (default `8765`) |
+| `TELEGRAM_MCP_TZ` | No | IANA timezone for timestamps in results (default: the machine's local zone) [fork] |
 | `TELEGRAM_ALLOW_SERVER_ROOTS_FALLBACK` | No | Allow file tools to fall back to CLI-provided roots when the client declares none |
 
 ## Code Style

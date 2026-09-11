@@ -21,6 +21,8 @@ import unicodedata
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+from telegram_mcp.timefmt import to_local_iso
+
 # Zero-width and invisible Unicode characters that can be used to hide content
 _INVISIBLE_CHARS = re.compile(
     "["
@@ -121,7 +123,7 @@ def sanitize_dict(data: Any) -> Any:
 def _json_default(obj: Any) -> Any:
     """JSON serializer for objects not serializable by default json code."""
     if isinstance(obj, datetime):
-        return obj.isoformat()
+        return to_local_iso(obj)  # [fork] local time, not Telegram's UTC
     if isinstance(obj, bytes):
         return obj.decode("utf-8", errors="replace")
     raise TypeError(f"Object of type {type(obj)} is not JSON serializable")

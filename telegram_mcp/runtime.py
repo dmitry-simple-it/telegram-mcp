@@ -47,6 +47,7 @@ import telethon.errors.rpcerrorlist
 from telethon.extensions import markdown as _tl_markdown
 from sanitize import sanitize_user_content, sanitize_name, sanitize_dict, format_tool_result
 from telegram_mcp.client_identity import client_identity_kwargs
+from telegram_mcp.timefmt import to_local_iso
 
 
 class ValidationError(Exception):
@@ -58,7 +59,7 @@ class ValidationError(Exception):
 def json_serializer(obj):
     """Helper function to convert non-serializable objects for JSON serialization."""
     if isinstance(obj, datetime):
-        return obj.isoformat()
+        return to_local_iso(obj)  # [fork] local time, not Telegram's UTC
     if isinstance(obj, bytes):
         return obj.decode("utf-8", errors="replace")
     # Add other non-serializable types as needed
@@ -950,7 +951,7 @@ def format_message(message) -> Dict[str, Any]:
     """
     result = {
         "id": message.id,
-        "date": message.date.isoformat(),
+        "date": to_local_iso(message.date),
         "text": get_message_text(message),
     }
 

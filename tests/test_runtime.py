@@ -464,9 +464,11 @@ async def test_resolve_input_entity_tries_marked_id_candidates_after_cache_miss(
     assert client.calls == [123, 123, -1000000000123]
 
 
-def test_json_serializer_handles_supported_and_unsupported_values():
+def test_json_serializer_handles_supported_and_unsupported_values(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_MCP_TZ", "Europe/Moscow")
     dt = datetime(2026, 1, 2, 3, 4, tzinfo=timezone.utc)
-    assert runtime.json_serializer(dt) == "2026-01-02T03:04:00+00:00"
+    # [fork] datetimes leave the server in local time, offset included
+    assert runtime.json_serializer(dt) == "2026-01-02T06:04:00+03:00"
     assert runtime.json_serializer(b"hello\xff") == "hello�"
     with pytest.raises(TypeError):
         runtime.json_serializer(object())
