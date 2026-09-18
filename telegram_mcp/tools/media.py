@@ -824,6 +824,25 @@ async def transcribe_voice_message(
                 return log_and_format_error(
                     "transcribe_voice_message", tr_err, chat_id=chat_id, message_id=message_id
                 )
+            finally:
+                # [fork] mlx's Metal buffer cache grows unbounded across calls
+                # (observed: ~700MB-1.5GB per transcription, never released on
+                # its own — confirmed via mx.get_cache_memory()). This is a
+                # long-lived singleton daemon (launchd, runs for days), so left
+                # unchecked the cache accumulates gigabytes over many voice
+                # messages and eventually starves/corrupts subsequent Metal
+                # allocations, surfacing as GEN-ERR on download/transcribe or
+                # as silent hallucinated output (e.g. "Продолжение следует...")
+                # on otherwise-valid audio. Release it after every call — a
+                # few hundred ms of extra weight-reload latency on the next
+                # transcription is a fine trade for the daemon never rotting
+                # under long uptime.
+                try:
+                    import mlx.core as _mx
+
+                    _mx.clear_cache()
+                except Exception:
+                    pass
         finally:
             if os.path.exists(tmp_path):
                 os.unlink(tmp_path)
