@@ -972,6 +972,68 @@ async def toggle_slow_mode(chat_id: Union[int, str], seconds: int = 0, account: 
 
 @mcp.tool(
     annotations=ToolAnnotations(
+        title="Set Chat History Visibility",
+        openWorldHint=True,
+        destructiveHint=True,
+        idempotentHint=True,
+    )
+)
+@with_account(readonly=False)
+@validate_id("chat_id")
+async def set_chat_history_visible(
+    chat_id: Union[int, str], visible: bool = True, account: str = None
+) -> str:
+    """
+    Make the chat history visible (or hidden) to newly joined members. [fork]
+
+    Only supergroups have this setting and only they expose t.me/c/... message
+    links. A basic group is first migrated to a supergroup (the same thing the
+    Telegram apps do when you flip this switch): members and messages are kept,
+    but the chat gets a NEW id, which this tool returns — use it from then on.
+
+    Args:
+        chat_id: ID or username of a basic group or supergroup.
+        visible: True — new members see earlier messages (default); False — hidden.
+    """
+    try:
+        cl = get_client(account)
+        await ensure_connected(cl)
+        entity = await resolve_entity(chat_id, cl)
+        migrated_from = None
+        if isinstance(entity, Chat):
+            result = await cl(functions.messages.MigrateChatRequest(chat_id=entity.id))
+            channel = next(
+                (c for c in getattr(result, "chats", []) if isinstance(c, Channel)), None
+            )
+            if channel is None:
+                return f"Error: Telegram did not return the new supergroup for chat {chat_id}."
+            migrated_from, entity = chat_id, channel
+        elif not isinstance(entity, Channel) or not getattr(entity, "megagroup", False):
+            return "Error: history visibility is only supported for groups and supergroups."
+        try:
+            await cl(
+                functions.channels.TogglePreHistoryHiddenRequest(
+                    channel=entity, enabled=not visible
+                )
+            )
+        except telethon.errors.rpcerrorlist.ChatNotModifiedError:
+            pass  # already in the requested state
+        new_id = utils.get_peer_id(entity)
+        state = "visible" if visible else "hidden"
+        if migrated_from is not None:
+            return (
+                f"Basic group {migrated_from} migrated to supergroup {new_id}; "
+                f"history for new members is {state}. Use chat_id {new_id} from now on."
+            )
+        return f"History for new members is {state} in supergroup {new_id}."
+    except telethon.errors.rpcerrorlist.ChatAdminRequiredError:
+        return "Error: admin rights required to change history visibility."
+    except Exception as e:
+        return log_and_format_error("set_chat_history_visible", e, chat_id=chat_id, visible=visible)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
         title="Edit Admin Rights",
         openWorldHint=True,
         destructiveHint=True,
