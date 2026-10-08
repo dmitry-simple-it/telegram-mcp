@@ -146,6 +146,14 @@ Validates ID params before the tool runs. Accepts integer, numeric string, or us
 - **`@username` + `id` in listings** — `get_sender_info()` / `get_sender_username()` thread the sender's
   public `@username` and numeric `sender_id` through `message_to_dict`, `format_message_line`,
   `get_message_context`, search / pinned / date-range, and participant/admin/banned listings.
+- **`watch_chat` / `unwatch_chat`** (`tools/events.py`) — the incoming handler drops group
+  messages by default; `watch_chat(chat_id, from_user=None)` opts one group in (optionally only
+  one sender), so waiting for a client's reply in a shared work chat goes through
+  `wait_for_*` and the incoming feed like a private message. The list persists in
+  `~/.local/state/telegram-mcp/watched_chats.json` (0600, `TELEGRAM_WATCHED_CHATS_FILE`); the
+  feed itself does NOT survive a restart unless `TELEGRAM_EVENT_FEED=1`. Pass `from_user` as a
+  numeric id: resolving a username walks dialogs and can hit a flood wait. A watch only sees
+  messages that arrive after it is set — check the history for anything earlier.
 - **SSE transport** (legacy fallback) — see Transport modes above; production default is Streamable HTTP.
 
 ## Configuration
