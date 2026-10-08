@@ -2,8 +2,9 @@
 
 Lets agents react to new client messages instead of polling. A Telethon
 NewMessage(incoming=True) handler records incoming private (non-bot, non-self)
-messages per chat; the two tools below expose them, with wait_for_settled_message
-debouncing a burst (several messages typed in a row) into a single settled event.
+messages per chat, plus messages from explicitly watched group chats [fork];
+the tools below expose them, with wait_for_settled_message debouncing a burst
+(several messages typed in a row) into a single settled event.
 """
 
 import asyncio
@@ -34,6 +35,41 @@ _FEED_FILE_ENV = "TELEGRAM_EVENT_FEED_FILE"
 _feed_task: Optional[asyncio.Task] = None
 _feed_settle_ms: int = 6000
 _feed_autostart_done: bool = False
+
+# --- Watched group chats [fork] ---
+# Group messages are ignored by default (a busy group would flood the feed).
+# watch_chat opts one chat in, optionally only for one sender — e.g. waiting for
+# a client's answer in a shared work chat. Persisted next to the feed file so a
+# watch set days ahead survives a server restart.
+# marked chat_id -> sender user id or None (anyone but bots/self)
+_watched_chats: Dict[int, Optional[int]] = {}
+_WATCH_FILE_ENV = "TELEGRAM_WATCHED_CHATS_FILE"
+
+
+def watched_chats_path() -> Path:
+    override = os.getenv(_WATCH_FILE_ENV)
+    return Path(override) if override else _default_feed_file().with_name("watched_chats.json")
+
+
+def _load_watched_chats() -> None:
+    try:
+        raw = json.loads(watched_chats_path().read_text(encoding="utf-8"))
+        _watched_chats.clear()
+        _watched_chats.update(
+            {int(k): (int(v) if v is not None else None) for k, v in raw.items()}
+        )
+    except FileNotFoundError:
+        pass
+    except Exception:
+        logging.getLogger("telegram_mcp").error("Cannot read watched chats file")
+
+
+def _save_watched_chats() -> None:
+    path = watched_chats_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump({str(k): v for k, v in _watched_chats.items()}, f)
 
 
 def _get_activity_event() -> asyncio.Event:
@@ -197,16 +233,27 @@ def _maybe_autostart_feed() -> None:
 
 
 async def _on_new_incoming(event) -> None:
-    """Record incoming private (non-bot, non-self) messages for the debounce tools."""
+    """Record incoming private (non-bot, non-self) messages for the debounce tools.
+
+    Group messages count only for chats opted in via watch_chat [fork].
+    """
     try:
-        if not event.is_private:
+        chat_id = event.chat_id
+        if not event.is_private and chat_id not in _watched_chats:
             return
         sender = await event.get_sender()
         if sender is None:
             return
         if getattr(sender, "bot", False) or getattr(sender, "is_self", False):
             return
-        chat_id = event.chat_id
+        only_sender = None if event.is_private else _watched_chats.get(chat_id)
+        if only_sender is not None and getattr(sender, "id", None) != only_sender:
+            return
+        name = utils.get_display_name(sender) or str(chat_id)
+        if not event.is_private:
+            chat = await event.get_chat()
+            title = utils.get_display_name(chat) if chat is not None else ""
+            name = f"{title} — {name}" if title else name
         now = time.monotonic()
         msg_id = event.message.id
         rec = _pending_msgs.get(chat_id)
@@ -217,7 +264,7 @@ async def _on_new_incoming(event) -> None:
                 "count": 1,
                 "first_id": msg_id,
                 "last_id": msg_id,
-                "name": utils.get_display_name(sender) or str(chat_id),
+                "name": name,
                 "username": getattr(sender, "username", None),
             }
         else:
@@ -452,10 +499,59 @@ async def incoming_feed_status() -> str:
         return log_and_format_error("incoming_feed_status", e)
 
 
+@mcp.tool(annotations=ToolAnnotations(title="Watch Chat", openWorldHint=True))
+@validate_id("chat_id")
+async def watch_chat(
+    chat_id: Union[int, str],
+    from_user: Optional[Union[int, str]] = None,
+    account: Optional[str] = None,
+) -> str:
+    """
+    [fork] Opt a GROUP chat into incoming-message tracking. By default only
+    private chats are tracked; after this, messages in the chat (from anyone but
+    bots/yourself, or only from `from_user`) reach wait_for_new_message,
+    wait_for_settled_message and the incoming feed exactly like private messages.
+    The watch list survives server restarts; remove with unwatch_chat.
+
+    Args:
+        chat_id: Group chat to watch (ID or username).
+        from_user: Only count messages from this user (ID or username). Use it when
+            waiting for one person's answer in a shared chat.
+    """
+    try:
+        cl = get_client(account)
+        target = await _wait_target(chat_id, account)
+        sender_id = None
+        if from_user not in (None, ""):
+            sender_id = get_marked_id(await resolve_entity(apply_alias(from_user), cl))
+        _watched_chats[target] = sender_id
+        _save_watched_chats()
+        return json.dumps(incoming_feed_state(), ensure_ascii=False)
+    except Exception as e:
+        return log_and_format_error("watch_chat", e, chat_id=chat_id)
+
+
+@mcp.tool(annotations=ToolAnnotations(title="Unwatch Chat", openWorldHint=True))
+@validate_id("chat_id")
+async def unwatch_chat(chat_id: Union[int, str], account: Optional[str] = None) -> str:
+    """[fork] Stop tracking a group chat previously added with watch_chat."""
+    try:
+        target = await _wait_target(chat_id, account)
+        _watched_chats.pop(target, None)
+        _pending_msgs.pop(target, None)
+        _save_watched_chats()
+        return json.dumps(incoming_feed_state(), ensure_ascii=False)
+    except Exception as e:
+        return log_and_format_error("unwatch_chat", e, chat_id=chat_id)
+
+
 def incoming_feed_state() -> Dict[str, Any]:
     path = feed_file_path()
     return {
         "enabled": feed_enabled(),
+        "watched_chats": [
+            {"chat_id": cid, "from_user": uid} for cid, uid in _watched_chats.items()
+        ],
         "feed_file": str(path),
         "settle_ms": _feed_settle_ms,
         # -F survives rotation/truncation and waits for a not-yet-created file.
@@ -472,6 +568,7 @@ def incoming_feed_state() -> Dict[str, Any]:
 
 
 # Wire up the listener as soon as this module is imported (alongside tool registration).
+_load_watched_chats()
 register_incoming_handlers()
 
 
@@ -482,4 +579,6 @@ __all__ = [
     "enable_incoming_feed",
     "disable_incoming_feed",
     "incoming_feed_status",
+    "watch_chat",
+    "unwatch_chat",
 ]

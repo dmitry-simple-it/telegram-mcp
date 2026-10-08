@@ -37,6 +37,8 @@ def _clean_state(monkeypatch, tmp_path):
     monkeypatch.setattr(events, "_feed_autostart_done", False)
     monkeypatch.delenv("TELEGRAM_EVENT_FEED", raising=False)
     monkeypatch.setenv("TELEGRAM_EVENT_FEED_FILE", str(tmp_path / "feed.jsonl"))
+    monkeypatch.setenv("TELEGRAM_WATCHED_CHATS_FILE", str(tmp_path / "watched.json"))
+    monkeypatch.setattr(events, "_watched_chats", {})
     yield
     task = events._feed_task
     if task is not None:
@@ -315,3 +317,68 @@ def _target(chat_id):
         return chat_id if value is not None else None
 
     return _resolve
+
+
+def _group_event(chat_id, sender_id, msg_id=7, title="Work chat"):
+    from types import SimpleNamespace
+
+    sender = SimpleNamespace(
+        id=sender_id, bot=False, is_self=False, username="u%d" % sender_id, first_name="Alex"
+    )
+    chat = SimpleNamespace(title=title)
+
+    async def get_sender():
+        return sender
+
+    async def get_chat():
+        return chat
+
+    return SimpleNamespace(
+        is_private=False,
+        chat_id=chat_id,
+        message=SimpleNamespace(id=msg_id),
+        get_sender=get_sender,
+        get_chat=get_chat,
+    )
+
+
+@pytest.mark.asyncio
+async def test_group_messages_ignored_unless_watched():
+    await events._on_new_incoming(_group_event(-100, 5))
+    assert events._pending_msgs == {}
+
+
+@pytest.mark.asyncio
+async def test_watched_group_records_only_chosen_sender(monkeypatch):
+    # SimpleNamespace is not a Telethon entity; name it the way Telethon would.
+    monkeypatch.setattr(
+        events.utils,
+        "get_display_name",
+        lambda e: getattr(e, "title", None) or getattr(e, "first_name", ""),
+    )
+    events._watched_chats[-100] = 5
+    await events._on_new_incoming(_group_event(-100, 6))
+    assert events._pending_msgs == {}
+    await events._on_new_incoming(_group_event(-100, 5))
+    rec = events._pending_msgs[-100]
+    assert rec["count"] == 1
+    assert rec["name"] == "Work chat — Alex"
+
+
+@pytest.mark.asyncio
+async def test_watched_group_without_sender_filter_records_anyone():
+    events._watched_chats[-100] = None
+    await events._on_new_incoming(_group_event(-100, 6))
+    await events._on_new_incoming(_group_event(-100, 7, msg_id=8))
+    assert events._pending_msgs[-100]["count"] == 2
+
+
+def test_watch_list_persists_across_reload():
+    events._watched_chats.update({-100: 5, -200: None})
+    events._save_watched_chats()
+    path = events.watched_chats_path()
+    assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+    events._watched_chats.clear()
+    events._load_watched_chats()
+    assert events._watched_chats == {-100: 5, -200: None}
+    assert {"chat_id": -100, "from_user": 5} in events.incoming_feed_state()["watched_chats"]
