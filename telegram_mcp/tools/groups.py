@@ -1035,6 +1035,49 @@ async def set_chat_history_visible(
 
 @mcp.tool(
     annotations=ToolAnnotations(
+        title="Delete Group",
+        openWorldHint=True,
+        destructiveHint=True,
+        idempotentHint=False,
+    )
+)
+@with_account(readonly=False)
+@validate_id("chat_id")
+async def delete_group(
+    chat_id: Union[int, str], confirm_title: str, account: str = None
+) -> str:
+    """
+    Permanently delete a group, supergroup or channel for ALL members. [fork]
+
+    Irreversible. Only the creator can do it. As a guard against a wrong id the
+    chat is deleted only when `confirm_title` equals its current title exactly.
+
+    Args:
+        chat_id: ID or username of the chat to delete.
+        confirm_title: the chat's exact current title.
+    """
+    try:
+        cl = get_client(account)
+        await ensure_connected(cl)
+        entity = await resolve_entity(chat_id, cl)
+        title = getattr(entity, "title", None)
+        if title is None:
+            return "Error: only groups, supergroups and channels can be deleted."
+        if title != confirm_title:
+            return f"Error: title mismatch — chat {chat_id} is titled {title!r}; nothing deleted."
+        if isinstance(entity, Channel):
+            await cl(functions.channels.DeleteChannelRequest(channel=entity))
+        else:
+            await cl(functions.messages.DeleteChatRequest(chat_id=entity.id))
+        return f"Chat {chat_id} ({title}) deleted for all members."
+    except telethon.errors.rpcerrorlist.ChatAdminRequiredError:
+        return "Error: only the creator can delete this chat."
+    except Exception as e:
+        return log_and_format_error("delete_group", e, chat_id=chat_id)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
         title="Edit Admin Rights",
         openWorldHint=True,
         destructiveHint=True,

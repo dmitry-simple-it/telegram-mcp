@@ -85,3 +85,37 @@ async def test_broadcast_channel_is_rejected(monkeypatch):
 
     assert client.requests == []
     assert result.startswith("Error:")
+
+
+class DeleteClient:
+    def __init__(self):
+        self.requests = []
+
+    async def __call__(self, request):
+        self.requests.append(request)
+        return SimpleNamespace()
+
+
+@pytest.mark.asyncio
+async def test_delete_group_requires_exact_title(monkeypatch):
+    client = DeleteClient()
+    _patch(monkeypatch, client)
+
+    result = await groups.delete_group(chat_id=-1000000000777, confirm_title="Other", account=None)
+
+    assert client.requests == []
+    assert result.startswith("Error: title mismatch")
+
+
+@pytest.mark.asyncio
+async def test_delete_group_deletes_supergroup_and_basic_group(monkeypatch):
+    client = DeleteClient()
+    _patch(monkeypatch, client)
+
+    await groups.delete_group(chat_id=-1000000000777, confirm_title="Supergroup", account=None)
+    await groups.delete_group(chat_id=-555, confirm_title="Basic Group", account=None)
+
+    channel_req, chat_req = client.requests
+    assert isinstance(channel_req, functions.channels.DeleteChannelRequest)
+    assert channel_req.channel is SUPERGROUP
+    assert isinstance(chat_req, functions.messages.DeleteChatRequest) and chat_req.chat_id == 555
