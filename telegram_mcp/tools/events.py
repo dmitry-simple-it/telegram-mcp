@@ -523,7 +523,13 @@ async def watch_chat(
         target = await _wait_target(chat_id, account)
         sender_id = None
         if from_user not in (None, ""):
-            sender_id = get_marked_id(await resolve_entity(apply_alias(from_user), cl))
+            user = apply_alias(from_user)
+            # A numeric user id is final; resolving it walks the dialog list and
+            # can hit a flood wait for a user not in the entity cache.
+            if isinstance(user, int) or str(user).lstrip("-").isdigit():
+                sender_id = int(user)
+            else:
+                sender_id = get_marked_id(await resolve_entity(user, cl))
         _watched_chats[target] = sender_id
         _save_watched_chats()
         return json.dumps(incoming_feed_state(), ensure_ascii=False)
