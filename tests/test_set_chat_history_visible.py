@@ -73,7 +73,7 @@ async def test_supergroup_only_toggles_and_accepts_not_modified(monkeypatch):
 
     (toggle,) = client.requests
     assert isinstance(toggle, functions.channels.TogglePreHistoryHiddenRequest)
-    assert "visible in supergroup -1000000000777" in result
+    assert "already visible in supergroup -1000000000777" in result
 
 
 @pytest.mark.asyncio

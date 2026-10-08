@@ -1010,6 +1010,7 @@ async def set_chat_history_visible(
             migrated_from, entity = chat_id, channel
         elif not isinstance(entity, Channel) or not getattr(entity, "megagroup", False):
             return "Error: history visibility is only supported for groups and supergroups."
+        changed = True
         try:
             await cl(
                 functions.channels.TogglePreHistoryHiddenRequest(
@@ -1017,9 +1018,9 @@ async def set_chat_history_visible(
                 )
             )
         except telethon.errors.rpcerrorlist.ChatNotModifiedError:
-            pass  # already in the requested state
+            changed = False  # already in the requested state
         new_id = utils.get_peer_id(entity)
-        state = "visible" if visible else "hidden"
+        state = ("now " if changed else "already ") + ("visible" if visible else "hidden")
         if migrated_from is not None:
             return (
                 f"Basic group {migrated_from} migrated to supergroup {new_id}; "
