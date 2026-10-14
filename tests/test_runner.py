@@ -195,6 +195,17 @@ class _FakeMcp:
         self.ran = "http"
 
 
+@pytest.fixture(autouse=True)
+def _http_through_fake_mcp(monkeypatch):
+    # _serve("http") runs uvicorn itself (idle restart, log rotation); these tests
+    # only check transport selection and settings, so route it to the fake mcp.
+    # The real wiring is covered in test_maintenance.py.
+    async def _serve_streamable_http():
+        await runner.mcp.run_streamable_http_async()
+
+    monkeypatch.setattr(runner, "_serve_streamable_http", _serve_streamable_http)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("transport", ["stdio", "unknown"])
 async def test_serve_defaults_to_stdio(monkeypatch, transport):

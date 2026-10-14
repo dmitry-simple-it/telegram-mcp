@@ -131,6 +131,35 @@ def _configure_transport_security() -> None:
     )
 
 
+async def _serve_streamable_http() -> None:
+    """mcp.run_streamable_http_async() plus [fork] idle restart and log rotation.
+
+    Same uvicorn setup as FastMCP's own runner, with the app wrapped in an
+    ActivityTracker and telegram_mcp.maintenance running alongside.
+    """
+    import uvicorn
+
+    from telegram_mcp.maintenance import ActivityTracker, maintenance_loop
+    from telegram_mcp.tools.events import feed_enabled
+
+    tracker = ActivityTracker(mcp.streamable_http_app())
+    config = uvicorn.Config(
+        tracker,
+        host=mcp.settings.host,
+        port=mcp.settings.port,
+        log_level=mcp.settings.log_level.lower(),
+        # Clients hold GET notification streams open indefinitely; without a cap,
+        # a self-restart would wait on them forever. Only reached when idle.
+        timeout_graceful_shutdown=5,
+    )
+    server = uvicorn.Server(config)
+    housekeeping = asyncio.create_task(maintenance_loop(server, tracker, feed_enabled))
+    try:
+        await server.serve()
+    finally:
+        housekeeping.cancel()
+
+
 async def _serve(transport: str) -> None:
     """Run the MCP server on the selected transport.
 
@@ -146,7 +175,7 @@ async def _serve(transport: str) -> None:
         mcp.settings.port = int(os.getenv("MCP_PORT", "8765"))
         _configure_transport_security()
         if transport == "http":
-            await mcp.run_streamable_http_async()
+            await _serve_streamable_http()
         else:
             await mcp.run_sse_async()
     else:
