@@ -764,9 +764,13 @@ async def transcribe_voice_message(
         message_id: The message ID containing a voice/audio message.
         language: Optional language code hint for transcription (e.g. "ru", "en", "de").
     """
-    try:
-        import mlx_whisper
-    except ImportError:
+    import importlib.util
+
+    from telegram_mcp.local_whisper import TranscriptionFailed, transcribe_file
+
+    # [fork] Only check availability here: MLX itself must never load into this
+    # long-lived daemon — the worker process runs it (see local_whisper.py).
+    if importlib.util.find_spec("mlx_whisper") is None:
         return json.dumps(
             {
                 "error": "mlx-whisper not installed. "
@@ -812,44 +816,32 @@ async def transcribe_voice_message(
             if not os.path.exists(tmp_path) or os.path.getsize(tmp_path) == 0:
                 return json.dumps({"error": f"Downloaded file is empty for message {message_id}."})
 
-            transcribe_kwargs = {"path_or_hf_repo": WHISPER_MODEL}
-            if language:
-                transcribe_kwargs["language"] = language
+            # [fork] A short download decodes to a clipped clip, and Whisper fills the
+            # gap with plausible text — refuse instead of transcribing part of the audio.
+            expected_size = _known_media_size(message)
+            actual_size = os.path.getsize(tmp_path)
+            if expected_size and actual_size != expected_size:
+                return json.dumps(
+                    {
+                        "error": f"Incomplete download for message {message_id}: "
+                        f"{actual_size} of {expected_size} bytes. Retry the call."
+                    }
+                )
 
             try:
-                result = await asyncio.to_thread(
-                    mlx_whisper.transcribe, tmp_path, **transcribe_kwargs
+                result = await transcribe_file(tmp_path, WHISPER_MODEL, language)
+            except TranscriptionFailed as tr_err:
+                reason = tr_err.reason  # curated text, never raw exception details
+                return json.dumps(
+                    {"error": f"Transcription failed for message {message_id}: {reason}"}
                 )
-            except Exception as tr_err:
-                return log_and_format_error(
-                    "transcribe_voice_message", tr_err, chat_id=chat_id, message_id=message_id
-                )
-            finally:
-                # [fork] mlx's Metal buffer cache grows unbounded across calls
-                # (observed: ~700MB-1.5GB per transcription, never released on
-                # its own — confirmed via mx.get_cache_memory()). This is a
-                # long-lived singleton daemon (launchd, runs for days), so left
-                # unchecked the cache accumulates gigabytes over many voice
-                # messages and eventually starves/corrupts subsequent Metal
-                # allocations, surfacing as GEN-ERR on download/transcribe or
-                # as silent hallucinated output (e.g. "Продолжение следует...")
-                # on otherwise-valid audio. Release it after every call — a
-                # few hundred ms of extra weight-reload latency on the next
-                # transcription is a fine trade for the daemon never rotting
-                # under long uptime.
-                try:
-                    import mlx.core as _mx
-
-                    _mx.clear_cache()
-                except Exception:
-                    pass
         finally:
             if os.path.exists(tmp_path):
                 os.unlink(tmp_path)
 
         return json.dumps(
             {
-                "text": result.get("text", "").strip(),
+                "text": result.get("text", ""),
                 "language": result.get("language"),
                 "duration": result.get("duration"),
                 "message_id": message_id,
