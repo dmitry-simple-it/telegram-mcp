@@ -12,7 +12,8 @@
         <string>run</string>
         <string>main.py</string>
         <string>__HOME__/Downloads</string>
-        <string>__HOME__/Projects/simple-seller-ai</string>
+        <string>__HOME__/Projects/onescreen</string>
+        <string>/private/tmp/claude-501</string>
     </array>
     <key>WorkingDirectory</key>
     <string>__PROJECT_PATH__</string>

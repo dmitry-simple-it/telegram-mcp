@@ -185,12 +185,14 @@ Environment variables (via `.env`):
 ## Production deployment (Simple IT)
 
 - Runs under launchd: `~/Library/LaunchAgents/com.telegram-mcp.server.plist`
-  (`uv --directory ~/Projects/telegram-mcp run main.py ~/Downloads ~/Projects/simple-seller-ai`,
+  (`uv --directory ~/Projects/telegram-mcp run main.py ~/Downloads ~/Projects/onescreen /private/tmp/claude-501`,
   Streamable HTTP on `:8765` (`MCP_TRANSPORT=http`), `KeepAlive=true`). Managed via `./telegram-mcp.sh
   install|uninstall|start|stop|restart|status|logs|health`.
 - **Allowed roots are set by the server**, i.e. by the positional args in the plist: `~/Downloads`
-  (first = where relative paths and default downloads land: `~/Downloads/downloads/`) and the
-  Razum workspace `~/Projects/simple-seller-ai` (its `wt-*` worktrees and `.tg-tmp/`). Clients
+  (first = where relative paths and default downloads land: `~/Downloads/downloads/`) the
+  company workspace `~/Projects/onescreen` (all projects, their worktrees and `.tg-tmp/`) and
+  `/private/tmp/claude-501` (Claude Code session scratchpads; `/tmp` is a symlink, paths are
+  resolved before the check). Clients
   cannot widen them over stateless HTTP. Do not add `~` or all of `~/Projects`. Edit the template
   `com.telegram-mcp.server.plist` too, or `install` silently drops a hand-added root.
 - Restart: `launchctl kickstart -k gui/$(id -u)/com.telegram-mcp.server` or `./telegram-mcp.sh
