@@ -548,6 +548,13 @@ async def list_chats(
                 record["unread_mark"] = True
             record["muted"] = is_muted
             record["archived"] = bool(getattr(dialog, "archived", False))
+            # [fork] Последнее сообщение диалога: по нему клиенты понимают, что в чате есть новое,
+            # не читая историю (harness: читать только чаты с last_message_id больше курсора).
+            top = getattr(dialog, "message", None)
+            if getattr(top, "id", None):
+                record["last_message_id"] = top.id
+            if getattr(dialog, "date", None):
+                record["last_date"] = to_local_iso(dialog.date)
 
             # Add unread mentions count if available
             unread_mentions = getattr(dialog, "unread_mentions_count", 0) or 0
