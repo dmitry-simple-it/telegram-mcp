@@ -212,7 +212,17 @@ async def _main() -> None:
             f"Telegram client(s) started ({labels}). Running MCP server ({transport})...",
             file=sys.stderr,
         )
-        await _serve(transport)
+        from telegram_mcp.reply_codex import dispatcher_loop
+
+        from telegram_mcp.tools.replies import recover_reply_history
+        recovery_task = asyncio.create_task(recover_reply_history())
+        replies_task = asyncio.create_task(dispatcher_loop())
+        try:
+            await _serve(transport)
+        finally:
+            replies_task.cancel()
+            recovery_task.cancel()
+            await asyncio.gather(replies_task, recovery_task, return_exceptions=True)
     except Exception as e:
         print(f"Error starting client: {e}", file=sys.stderr)
         if isinstance(e, sqlite3.OperationalError) and "database is locked" in str(e):

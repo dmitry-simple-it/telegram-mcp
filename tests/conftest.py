@@ -15,3 +15,9 @@ def transcript_cache_dir(tmp_path, monkeypatch):
     d = tmp_path / "transcripts"
     monkeypatch.setenv("TELEGRAM_TRANSCRIPT_CACHE_DIR", str(d))
     return d
+
+
+@pytest.fixture(autouse=True)
+def isolated_reply_store(tmp_path, monkeypatch):
+    # Never let mocked incoming handlers write to the owner's real subscription DB.
+    monkeypatch.setenv("TELEGRAM_REPLY_DB", str(tmp_path / "replies.db"))

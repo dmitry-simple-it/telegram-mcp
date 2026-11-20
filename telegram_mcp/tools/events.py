@@ -232,19 +232,39 @@ def _maybe_autostart_feed() -> None:
         _start_feed(_feed_settle_ms)
 
 
-async def _on_new_incoming(event) -> None:
+async def _on_new_incoming(event, account: str = "default") -> None:
     """Record incoming private (non-bot, non-self) messages for the debounce tools.
 
     Group messages count only for chats opted in via watch_chat [fork].
     """
     try:
         chat_id = event.chat_id
-        if not event.is_private and chat_id not in _watched_chats:
-            return
         sender = await event.get_sender()
         if sender is None:
             return
         if getattr(sender, "bot", False) or getattr(sender, "is_self", False):
+            return
+        # Independent durable inbox, before legacy watch/feed filters. Observing
+        # here means the feed and each session get their own copy of the event.
+        try:
+            from telegram_mcp.reply_store import ReplyStore
+
+            header = getattr(event.message, "reply_to", None)
+            topic = getattr(header, "reply_to_top_id", None)
+            if topic is None and getattr(header, "forum_topic", False):
+                topic = getattr(header, "reply_to_msg_id", None)
+            if topic is None and not event.is_private:
+                chat = await event.get_chat()
+                if getattr(chat, "forum", False):
+                    topic = 1  # General in a forum is distinct from no topic filter.
+            ReplyStore().observe(
+                account=account, chat_id=chat_id, message_id=event.message.id,
+                sender_id=getattr(sender, "id", None), topic_id=topic,
+                reply_to=getattr(header, "reply_to_msg_id", None),
+            )
+        except Exception:
+            logging.getLogger("telegram_mcp").error("Cannot persist reply event")
+        if not event.is_private and chat_id not in _watched_chats:
             return
         only_sender = None if event.is_private else _watched_chats.get(chat_id)
         if only_sender is not None and getattr(sender, "id", None) != only_sender:
@@ -287,9 +307,12 @@ def register_incoming_handlers() -> None:
     delivers events once connected. Called at import time so the package's
     `import telegram_mcp.tools` registration also wires up the listener.
     """
-    for cl in clients.values():
+    for label, cl in clients.items():
+        async def on_account_incoming(event, account=label):
+            await _on_new_incoming(event, account=account)
+
         try:
-            cl.add_event_handler(_on_new_incoming, _events.NewMessage(incoming=True))
+            cl.add_event_handler(on_account_incoming, _events.NewMessage(incoming=True))
         except Exception:
             logging.getLogger("telegram_mcp").error("Failed to register incoming handler")
 

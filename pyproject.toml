@@ -31,6 +31,7 @@ dependencies = [
     "python-json-logger>=3.3.0",
     "qrcode>=8.2",
     "telethon>=1.44.0",
+    "websockets>=14,<17",
     "mlx-whisper>=0.4.0",
 ]
 
@@ -50,6 +51,7 @@ packages = ["telegram_mcp", "telegram_mcp.tools"]
 
 [project.scripts]
 telegram-mcp = "main:main"
+telegram-replies = "telegram_mcp.reply_cli:main"
 telegram-mcp-generate-session = "session_string_generator:main"
 
 [tool.black]

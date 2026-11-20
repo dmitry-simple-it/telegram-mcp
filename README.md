@@ -714,3 +714,10 @@ Maintained by [@chigwell](https://github.com/chigwell) and [@l1v0n1](https://git
 <a href="https://github.com/chigwell/telegram-mcp/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=chigwell/telegram-mcp" />
 </a>
+
+### Automatic continuation after Telegram replies (Simple IT fork)
+
+Session-bound subscriptions can wake the owning Codex thread or an opt-in Claude Code channel.
+Events and acknowledgements persist independently of the existing incoming feed and harness.
+See [reply subscriptions](docs/reply-subscriptions.md) for setup, commands, delivery semantics,
+permissions and closed-session limitations.

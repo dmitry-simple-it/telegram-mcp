@@ -158,7 +158,20 @@ WHISPER_MODEL = os.getenv("WHISPER_MODEL", "mlx-community/whisper-small-mlx")
 # The shared HTTP service can be consumed by long-lived MCP clients. Stateless requests keep
 # those clients usable across server-process restarts instead of rejecting their next call
 # with "No valid session ID provided". Stdio transport remains unaffected.
-mcp = FastMCP("telegram", stateless_http=True)
+mcp = FastMCP(
+    "telegram", stateless_http=True,
+    instructions=(
+        "When the owner-authorized task requires asking someone in Telegram and waiting for "
+        "their response, automatically subscribe to that chat immediately after the approved "
+        "question is sent and verified. Use the sent message ID as after_message_id. In Codex, "
+        "read CODEX_THREAD_ID from the execution environment and use subscribe_reply. In Claude "
+        "Code use the telegram-replies channel's subscribe_reply if available. Do not silently "
+        "claim automatic follow-up when no working adapter is available. On wake-up acknowledge "
+        "the event, read the actual Telegram message/media, and continue the existing task. "
+        "Cancel waits when done. Subscription never authorizes sending messages or expands the "
+        "owner's approval for implementation or production operations."
+    ),
+)
 
 # Annotate all tool results with audience=["user"] so MCP clients know
 # the content is user-generated data, not instructions for the model.
