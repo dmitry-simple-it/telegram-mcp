@@ -298,6 +298,25 @@ class ReplyStore:
                 )
             ]
 
+    def inactive_deliveries(self):
+        with self.connection() as db:
+            return [
+                self._batch(r)
+                for r in db.execute(
+                    "SELECT d.* FROM deliveries d JOIN subscriptions s ON s.id=d.subscription_id "
+                    "WHERE s.status!='active' AND s.client='codex' "
+                    "AND d.status NOT IN ('acked','sent','cleared')"
+                )
+            ]
+
+    def mark_cleared(self, delivery_id):
+        with self.connection() as db:
+            db.execute(
+                "UPDATE deliveries SET status='cleared' WHERE id=? "
+                "AND status NOT IN ('acked','sent')",
+                (delivery_id,),
+            )
+
     def claim(self, delivery_id, *, now=None):
         now = time.time() if now is None else now
         with self.connection() as db:
@@ -319,7 +338,7 @@ class ReplyStore:
                 (time.time() if now is None else now, delivery_id),
             )
 
-    def fail(self, delivery_id, error, *, retryable, now=None):
+    def fail(self, delivery_id, error, *, retryable, claimed=True, now=None):
         now = time.time() if now is None else now
         with self.connection() as db:
             row = db.execute(
@@ -328,13 +347,14 @@ class ReplyStore:
             delay = min(300, 2 ** min(row["attempts"] + 2, 8))
             db.execute(
                 """UPDATE deliveries SET status=?,updated_at=?,next_attempt=?,last_error=?
-                WHERE id=? AND status IN ('ready','sending')""",
+                WHERE id=? AND status=?""",
                 (
                     "ready" if retryable else "sending",
                     now,
                     now + delay,
                     str(error)[:500],
                     delivery_id,
+                    "sending" if claimed else "ready",
                 ),
             )
 

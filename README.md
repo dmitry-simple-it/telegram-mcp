@@ -717,7 +717,7 @@ Maintained by [@chigwell](https://github.com/chigwell) and [@l1v0n1](https://git
 
 ### Automatic continuation after Telegram replies (Simple IT fork)
 
-Session-bound subscriptions can wake the owning Codex thread or an opt-in Claude Code channel.
+Session-bound subscriptions can wake the owning Codex thread. Claude support is deferred.
 Events and acknowledgements persist independently of the existing incoming feed and harness.
 See [reply subscriptions](docs/reply-subscriptions.md) for setup, commands, delivery semantics,
 permissions and closed-session limitations.

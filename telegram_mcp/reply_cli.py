@@ -5,10 +5,7 @@ import asyncio
 import json
 import os
 from pathlib import Path
-import subprocess
 import sys
-import tempfile
-import uuid
 
 import httpx
 
@@ -36,10 +33,6 @@ def parser():
         cmd = commands.add_parser(name)
         cmd.add_argument(key)
         cmd.add_argument("--session-id", default=os.getenv("CODEX_THREAD_ID"))
-    claude = commands.add_parser(
-        "claude", help="Launch interactive Claude with a per-session reply channel"
-    )
-    claude.add_argument("claude_args", nargs=argparse.REMAINDER)
     commands.add_parser("dispatch-once", help=argparse.SUPPRESS)
     return root
 
@@ -81,62 +74,6 @@ async def call_mcp(name, arguments):
     return json.loads(text)
 
 
-def claude_command(args, config_path, session_id):
-    # Use only stdio-channel allowlist opt-in. Never bypass tool permission checks.
-    return [
-        "claude",
-        "--mcp-config",
-        str(config_path),
-        "--dangerously-load-development-channels",
-        "server:telegram-replies",
-        *args,
-    ]
-
-
-def launch_claude(args):
-    if args and args[0] == "--":
-        args = args[1:]
-    if "-p" in args or "--print" in args:
-        raise ValueError(
-            "Custom Claude channels require interactive startup; --print is unsupported"
-        )
-    sid = None
-    for flag in ("--session-id", "--resume", "-r"):
-        if flag in args:
-            index = args.index(flag)
-            if index + 1 < len(args):
-                sid = args[index + 1]
-                break
-    if sid is not None:
-        try:
-            uuid.UUID(sid)
-        except ValueError:
-            raise ValueError(
-                "Resume the reply channel using an explicit Claude session UUID"
-            ) from None
-    elif any(a in args for a in ("-c", "--continue", "-r", "--resume")):
-        raise ValueError("Use --resume <session UUID> to preserve the reply subscription binding")
-    else:
-        sid = str(uuid.uuid4())
-        args = ["--session-id", sid, *args]
-    with tempfile.TemporaryDirectory(prefix="telegram-replies-") as folder:
-        config = Path(folder) / "channel.json"
-        config.write_text(
-            json.dumps(
-                {
-                    "mcpServers": {
-                        "telegram-replies": {
-                            "command": sys.executable,
-                            "args": ["-m", "telegram_mcp.reply_channel", "--session-id", sid],
-                        }
-                    }
-                }
-            )
-        )
-        config.chmod(0o600)
-        return subprocess.call(claude_command(args, config, sid))
-
-
 async def run(args):
     if args.command == "dispatch-once":
         from telegram_mcp.reply_codex import dispatch_once
@@ -154,7 +91,11 @@ async def run(args):
     if args.command == "ack":
         return store.acknowledge(args.delivery_id, args.session_id)
     if args.command == "cancel":
-        return store.cancel(args.subscription_id, args.session_id)
+        from telegram_mcp.reply_codex import cleanup_inactive
+
+        result = store.cancel(args.subscription_id, args.session_id)
+        await cleanup_inactive(store)
+        return result
     result = {
         "subscriptions": store.list_subscriptions(session_id=args.session_id),
         "deliveries": store.deliveries(session_id=args.session_id),
@@ -175,8 +116,6 @@ async def run(args):
 def main():
     args = parser().parse_args()
     try:
-        if args.command == "claude":
-            raise SystemExit(launch_claude(args.claude_args))
         print(json.dumps(asyncio.run(run(args)), ensure_ascii=False, indent=2))
     except (ValueError, OSError, httpx.HTTPError) as exc:
         print(f"telegram-replies: {exc}", file=sys.stderr)

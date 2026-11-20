@@ -1,7 +1,6 @@
 import asyncio
 import json
 import os
-import sys
 import tempfile
 from pathlib import Path
 
@@ -19,6 +18,9 @@ class FakeCodex:
         self.items = []
         self.starts = []
         self.reject_start = False
+        self.queue = []
+        self.race_busy = False
+        self.enqueues = 0
 
     async def handle(self, ws):
         async for raw in ws:
@@ -39,13 +41,42 @@ class FakeCodex:
                 }
             elif method == "thread/items/list":
                 result = {"data": self.items, "nextCursor": None}
-            elif method == "turn/start":
-                if self.reject_start:
-                    error = {"code": -32000, "message": "thread already has active turn"}
+            elif method == "thread/queue/list":
+                result = {"data": self.queue, "nextCursor": None}
+            elif method == "thread/queue/add":
+                self.enqueues += 1
+                entry = {
+                    "id": f"q-{self.enqueues}",
+                    "input": req["params"]["input"],
+                    "clientUserMessageId": req["params"]["clientUserMessageId"],
+                }
+                self.queue.append(entry)
+                if self.race_busy:
+                    self.status = "active"
+                result = {"queuedSubmission": entry}
+            elif method == "thread/queue/start":
+                entry = next(
+                    (i for i in self.queue if i["id"] == req["params"]["queuedSubmissionId"]), None
+                )
+                if self.reject_start or self.status != "idle":
+                    error = {
+                        "code": -32000,
+                        "message": "thread already has an active or pending turn",
+                    }
+                elif entry is None:
+                    error = {"code": -32000, "message": "queued submission not found"}
                 else:
-                    self.starts.append(req["params"])
-                    self.items.append({"type": "userMessage", "content": req["params"]["input"]})
+                    self.queue.remove(entry)
+                    self.starts.append(
+                        {"threadId": req["params"]["threadId"], "input": entry["input"]}
+                    )
+                    self.items.append({"type": "userMessage", "content": entry["input"]})
                 result = {"turn": {"id": "turn-1", "status": "inProgress"}}
+            elif method == "thread/queue/delete":
+                self.queue = [
+                    i for i in self.queue if i["id"] != req["params"]["queuedSubmissionId"]
+                ]
+                result = {"deleted": True}
             else:
                 error = {"code": -32601, "message": "unknown method"}
                 result = None
@@ -143,7 +174,10 @@ async def test_explicit_start_rejection_is_retryable(tmp_path, codex):
     store = ReplyStore(tmp_path / "db")
     batch(store, endpoint)
     await dispatch_once(store)
-    assert store.deliveries(status="ready")
+    assert store.deliveries(status="sending")
+    fake.reject_start = False
+    await dispatch_once(store)
+    assert len(fake.starts) == 1 and fake.enqueues == 1
 
 
 @pytest.mark.asyncio
@@ -172,92 +206,6 @@ def test_prompt_contains_metadata_and_preserves_approval_boundaries():
     assert "untrusted" in text and "approval" in text
 
 
-@pytest.mark.asyncio
-async def test_claude_channel_real_stdio_initialize_subscribe_notify_ack(tmp_path):
-    env = dict(os.environ, TELEGRAM_REPLY_DB=str(tmp_path / "channel.db"))
-    proc = await asyncio.create_subprocess_exec(
-        sys.executable,
-        "-m",
-        "telegram_mcp.reply_channel",
-        "--session-id",
-        "channel-1",
-        env=env,
-        stdin=asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-
-    async def send(data):
-        proc.stdin.write((json.dumps(data) + "\n").encode())
-        await proc.stdin.drain()
-
-    async def receive(wanted):
-        for _ in range(50):
-            data = json.loads(await asyncio.wait_for(proc.stdout.readline(), 6))
-            if wanted(data):
-                return data
-        raise AssertionError("expected MCP message not received")
-
-    try:
-        await send(
-            {
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "initialize",
-                "params": {
-                    "protocolVersion": "2025-03-26",
-                    "capabilities": {},
-                    "clientInfo": {"name": "test-claude", "version": "1"},
-                },
-            }
-        )
-        hello = await receive(lambda d: d.get("id") == 1)
-        assert hello["result"]["capabilities"]["experimental"]["claude/channel"] == {}
-        await send({"jsonrpc": "2.0", "method": "notifications/initialized"})
-        await send(
-            {
-                "jsonrpc": "2.0",
-                "id": 2,
-                "method": "tools/call",
-                "params": {
-                    "name": "subscribe_reply",
-                    "arguments": {
-                        "chat_id": 42,
-                        "after_message_id": 10,
-                        "account": "default",
-                        "settle_seconds": 0,
-                    },
-                },
-            }
-        )
-        result = await receive(lambda d: d.get("id") == 2)
-        assert not result["result"].get("isError")
-        store = ReplyStore(tmp_path / "channel.db")
-        store.observe(account="default", chat_id=42, message_id=11, sender_id=42)
-        notice = await receive(lambda d: d.get("method") == "notifications/claude/channel")
-        did = notice["params"]["meta"]["delivery_id"]
-        assert did in notice["params"]["content"]
-        assert store.deliveries(status="sent")[0]["id"] == did
-        await send(
-            {
-                "jsonrpc": "2.0",
-                "id": 3,
-                "method": "tools/call",
-                "params": {"name": "ack_reply_event", "arguments": {"delivery_id": did}},
-            }
-        )
-        response = await receive(lambda d: d.get("id") == 3)
-        assert not response["result"].get("isError")
-        assert store.deliveries(status="sent") == []
-    finally:
-        proc.stdin.close()
-        try:
-            await asyncio.wait_for(proc.wait(), 3)
-        except asyncio.TimeoutError:
-            proc.terminate()
-            await proc.wait()
-
-
 def test_cli_subscription_uses_current_thread_and_cancel_is_scoped(monkeypatch, tmp_path):
     from telegram_mcp import reply_cli
     from unittest.mock import AsyncMock
@@ -277,18 +225,6 @@ def test_cli_subscription_uses_current_thread_and_cancel_is_scoped(monkeypatch, 
     args = reply_cli.parser().parse_args(["cancel", sub["id"]])
     with pytest.raises(ValueError, match="session"):
         asyncio.run(reply_cli.run(args))
-
-
-def test_claude_launch_preserves_permissions_and_binds_resume_uuid():
-    from telegram_mcp.reply_cli import claude_command
-
-    sid = "01234567-89ab-4cde-8123-456789abcdef"
-    args = ["--resume", sid]
-    cmd = claude_command(args, "/tmp/config.json", sid)
-    assert cmd[-2:] == args
-    assert "--dangerously-skip-permissions" not in cmd
-    assert "--dangerously-load-development-channels" in cmd
-    assert "server:telegram-replies" in cmd
 
 
 @pytest.mark.asyncio
@@ -328,3 +264,63 @@ async def test_reconcile_reads_wrapped_app_server_history_items(tmp_path, codex)
     await dispatch_once(store)
     assert store.deliveries(status="sent")[0]["id"] == item["id"]
     assert fake.starts == []
+
+
+@pytest.mark.asyncio
+async def test_unclaimed_worker_failure_never_releases_another_workers_claim(
+    tmp_path, monkeypatch
+):
+    from telegram_mcp import reply_codex
+
+    store = ReplyStore(tmp_path / "db")
+    item = batch(store, "/tmp/unused")
+
+    class RacingConnection:
+        def __init__(self, endpoint):
+            pass
+
+        async def __aenter__(self):
+            # Another dispatcher accepted turn/start while this worker connected.
+            assert store.claim(item["id"])
+            raise OSError("connection failed before THIS worker claimed")
+
+        async def __aexit__(self, *exc):
+            pass
+
+    monkeypatch.setattr(reply_codex, "CodexConnection", RacingConnection)
+    await reply_codex.dispatch_once(store)
+    assert store.deliveries(status="sending")[0]["id"] == item["id"]
+    store.mark_sent(item["id"])  # the accepted worker gets its successful response
+    assert store.deliveries(status="sent")[0]["id"] == item["id"]
+    assert store.prepare() == []
+
+
+@pytest.mark.asyncio
+async def test_becoming_busy_between_read_and_delivery_queues_without_steering(tmp_path, codex):
+    fake, endpoint = codex
+    fake.race_busy = True
+    store = ReplyStore(tmp_path / "db")
+    item = batch(store, endpoint)
+    await dispatch_once(store)
+    assert fake.starts == [] and fake.enqueues == 1
+    assert store.deliveries(status="sending")[0]["id"] == item["id"]
+    fake.race_busy = False
+    fake.status = "idle"
+    await dispatch_once(store)
+    assert len(fake.starts) == 1 and fake.enqueues == 1
+    assert store.deliveries(status="sent")[0]["id"] == item["id"]
+
+
+@pytest.mark.asyncio
+async def test_cancel_removes_native_queued_event_before_it_can_start(tmp_path, codex):
+    fake, endpoint = codex
+    fake.race_busy = True
+    store = ReplyStore(tmp_path / "db")
+    item = batch(store, endpoint)
+    await dispatch_once(store)
+    assert len(fake.queue) == 1
+    store.cancel(item["subscription_id"], "thread-1")
+    fake.status = "idle"
+    fake.race_busy = False
+    await dispatch_once(store)
+    assert fake.queue == [] and fake.starts == []

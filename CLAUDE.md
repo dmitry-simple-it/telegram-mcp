@@ -208,17 +208,15 @@ Environment variables (via `.env`):
 When an owner-authorized task requires a question in Telegram and waiting for a response,
 automatically subscribe immediately after the approved send is verified; use the sent message ID
 as anchor. Codex reads `CODEX_THREAD_ID` from its execution environment and uses `subscribe_reply`
-or `bin/telegram-replies subscribe <chat> --after <id>`. Claude uses the thin `telegram-replies`
-stdio channel, started via `bin/telegram-replies claude`; it binds the session automatically.
-A wake-up must be ACKed first, then the agent reads the real message/media and continues the
-existing authorized task. Cancel subscriptions at task completion. No new messaging, implementation
-or production permissions are implied. Don't claim automatic follow-up without a working adapter.
+or `bin/telegram-replies subscribe <chat> --after <id>`. A wake-up must be ACKed first, then the
+agent reads the real message/media and continues the existing authorized task. Cancel subscriptions
+at task completion. No new messaging, implementation or production permissions are implied.
+Don't claim automatic follow-up without a working adapter. Claude is deferred by the owner.
 
 Implementation: `reply_store.py` (independent SQLite metadata queue), `reply_codex.py` (existing
-private app-server socket; queue while busy; uncertain-send reconciliation), `reply_channel.py`
-(Claude channel + explicit ACK; no Telethon), `reply_cli.py`, `tools/replies.py`. The incoming
-handler observes account/sender/topic before legacy feed filtering. Existing feed/harness stays
-unchanged. State: `~/.local/state/telegram-mcp/replies.db` (0600); `TELEGRAM_REPLY_DB` overrides it.
-Closed clients keep pending replies; they don't run while closed. Claude channels require
-interactive opt-in; do not edit global MCP config to activate the wrapper. Full usage, limitations,
+private app-server socket, native queue/add + queue/start with atomic idle check and uncertain-send
+reconciliation), `reply_cli.py`, `tools/replies.py`. The incoming handler observes account/sender/topic
+before legacy feed filtering. Existing feed/harness stays unchanged. State:
+`~/.local/state/telegram-mcp/replies.db` (0600); `TELEGRAM_REPLY_DB` overrides it. Closed clients
+keep pending replies until restored; they don't run while closed. Full usage, limitations,
 acceptance and rollback: `docs/reply-subscriptions.md`.

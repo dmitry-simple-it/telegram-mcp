@@ -95,6 +95,20 @@ class CodexConnection:
                 break
         return False
 
+    async def queued_delivery(self, session_id, delivery_id):
+        cursor = None
+        while True:
+            params = {"threadId": session_id, "limit": 100}
+            if cursor:
+                params["cursor"] = cursor
+            result = await self.rpc("thread/queue/list", params)
+            for entry in result.get("data", []):
+                if entry.get("clientUserMessageId") == delivery_id:
+                    return entry["id"]
+            cursor = result.get("nextCursor")
+            if not cursor:
+                return None
+
 
 async def find_codex_endpoint(session_id, directory=None):
     if not session_id:
@@ -109,6 +123,9 @@ async def find_codex_endpoint(session_id, directory=None):
             async with CodexConnection(path, timeout=3) as conn:
                 thread = await conn.thread(session_id)
                 if thread.get("status", {}).get("type") not in ("notLoaded", "systemError"):
+                    # Require native atomic start-if-idle; don't fall back to
+                    # turn/start, which may steer a turn begun by the user.
+                    await conn.rpc("thread/queue/list", {"threadId": session_id, "limit": 1})
                     return str(path)
         except (OSError, ValueError, RuntimeError, asyncio.TimeoutError):
             continue
@@ -160,19 +177,62 @@ def delivery_prompt(batch):
     )
 
 
+async def start_queued(store, conn, batch, queued_id):
+    # Check cancellation immediately before handing off. The app-server also
+    # checks idle atomically, unlike turn/start's implicit mid-turn steering.
+    if not any(b["id"] == batch["id"] for b in store.deliveries(status="sending", client="codex")):
+        await conn.rpc(
+            "thread/queue/delete",
+            {"threadId": batch["session_id"], "queuedSubmissionId": queued_id},
+        )
+        return
+    await conn.rpc(
+        "thread/queue/start", {"threadId": batch["session_id"], "queuedSubmissionId": queued_id}
+    )
+    store.mark_sent(batch["id"])
+
+
+async def cleanup_inactive(store):
+    for batch in store.inactive_deliveries():
+        try:
+            async with CodexConnection(batch["endpoint"]) as conn:
+                queued_id = await conn.queued_delivery(batch["session_id"], batch["id"])
+                if queued_id:
+                    await conn.rpc(
+                        "thread/queue/delete",
+                        {"threadId": batch["session_id"], "queuedSubmissionId": queued_id},
+                    )
+            store.mark_cleared(batch["id"])
+        except Exception:
+            # The event stays visible for cleanup after reconnect.
+            pass
+
+
 async def dispatch_once(store=None):
     store = store or ReplyStore()
-    # After uncertain transport outcomes, prove acceptance from the owning thread's
-    # user-input history. Never interpret a timeout as permission to start twice.
+    ready = store.prepare(client="codex")  # expire subscriptions before any handoff
+    await cleanup_inactive(store)
+    # A queue submission's stable clientUserMessageId lets us reconcile both
+    # lost enqueue responses and lost start responses without re-enqueueing.
     for batch in store.deliveries(status="sending", client="codex"):
         try:
             async with CodexConnection(batch["endpoint"]) as conn:
+                thread = await conn.thread(batch["session_id"])
                 if await conn.contains_delivery(batch["session_id"], batch["id"]):
                     store.mark_sent(batch["id"])
+                    continue
+                if thread.get("status", {}).get("type") != "idle":
+                    continue
+                queued_id = await conn.queued_delivery(batch["session_id"], batch["id"])
+                if queued_id:
+                    await start_queued(store, conn, batch, queued_id)
         except Exception:
+            # No marker in history/queue is not proof an in-flight enqueue
+            # failed. Keep the uncertain intent, never guess by sending again.
             pass
-    for batch in store.prepare(client="codex"):
+    for batch in ready:
         claimed = False
+        enqueued = False
         try:
             async with CodexConnection(batch["endpoint"]) as conn:
                 thread = await conn.thread(batch["session_id"])
@@ -181,19 +241,21 @@ async def dispatch_once(store=None):
                 if not store.claim(batch["id"]):
                     continue
                 claimed = True
-                await conn.rpc(
-                    "turn/start",
+                result = await conn.rpc(
+                    "thread/queue/add",
                     {
                         "threadId": batch["session_id"],
+                        "clientUserMessageId": batch["id"],
                         "input": [{"type": "text", "text": delivery_prompt(batch)}],
                     },
                 )
-                store.mark_sent(batch["id"])
+                enqueued = True
+                await start_queued(store, conn, batch, result["queuedSubmission"]["id"])
         except RpcError as exc:
-            # A protocol error is a definitive rejection, unlike a lost response.
-            store.fail(batch["id"], str(exc), retryable=True)
+            # Queue/start busy rejection keeps the SAME durable queue entry.
+            store.fail(batch["id"], str(exc), retryable=not enqueued, claimed=claimed)
         except Exception as exc:
-            store.fail(batch["id"], type(exc).__name__, retryable=not claimed)
+            store.fail(batch["id"], type(exc).__name__, retryable=not claimed, claimed=claimed)
 
 
 async def dispatcher_loop():

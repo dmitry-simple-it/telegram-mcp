@@ -84,8 +84,7 @@ async def subscribe_reply(
     For Codex: read CODEX_THREAD_ID from your execution environment once, then pass
     it as session_id. The shared HTTP server cannot infer the calling thread.
     Exact existing loaded thread/socket is verified; no new Codex process is launched.
-    For Claude use subscribe_reply on the telegram-replies channel instead; it binds
-    its session automatically. Ordinary follow-ups and media count, not only replies.
+    This release supports Codex only. Ordinary follow-ups and media count, not only replies.
     Register immediately after a question, using its sent message ID as anchor.
     At task completion cancel this subscription. No authorization to send messages,
     modify client data, fix code or deploy is granted by a subscription/event.
@@ -131,7 +130,12 @@ async def list_reply_subscriptions(session_id: str) -> str:
 @mcp.tool(annotations=ToolAnnotations(title="Cancel Reply Subscription", openWorldHint=False))
 async def cancel_reply_subscription(subscription_id: str, session_id: str) -> str:
     """Stop automatically continuing this session for the subscription's chat."""
-    return json.dumps(ReplyStore().cancel(subscription_id, session_id))
+    from telegram_mcp.reply_codex import cleanup_inactive
+
+    store = ReplyStore()
+    result = store.cancel(subscription_id, session_id)
+    await cleanup_inactive(store)
+    return json.dumps(result)
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Acknowledge Reply Event", openWorldHint=False))
