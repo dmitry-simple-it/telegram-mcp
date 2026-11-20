@@ -181,3 +181,14 @@ def test_rebinding_same_thread_updates_restarted_socket_without_duplicate_subscr
     rebound = make_sub(store, endpoint="/tmp/new-private-socket")
     assert rebound["id"] == original["id"]
     assert rebound["endpoint"] == "/tmp/new-private-socket"
+
+
+def test_default_state_directory_is_owner_only_even_if_feed_created_it_earlier(
+    tmp_path, monkeypatch
+):
+    monkeypatch.delenv("TELEGRAM_REPLY_DB")
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    folder = tmp_path / "telegram-mcp"
+    folder.mkdir(mode=0o755)
+    ReplyStore()
+    assert stat.S_IMODE(folder.stat().st_mode) == 0o700

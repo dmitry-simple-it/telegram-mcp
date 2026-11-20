@@ -13,3 +13,6 @@ Final review: fresh agent /root/reply_bridge_review. P1 duplicate-worker failure
 Real Claude test: org policy blocks Channels. No policy changes; owner then explicitly deferred Claude.
 
 Final verification: 613 passed, 2 pre-existing warnings; local lint flags match project rules. No deferred material findings. Claude excluded from this release.
+
+Task 4: complete for Codex. Installed into live migrate/upstream-v2 preserving existing modified plist, uv sync --locked, singleton restarted. Live tools/list exposes all four tools. Real current thread native queue/add accepted, queue/start refused active thread atomically, test item deleted and absence verified. User's fork pushed. Maria subscription armed after already processed message 429546; no history recovery error. No new external reply has arrived yet, so actual future model continuation remains an observation to make on first real event, not an already observed success claim.
+Final suite: 614 passed, two pre-existing warnings; focused flake8 clean. Existing state directory permissions are tightened only for the app-owned default path; arbitrary override parents stay untouched.

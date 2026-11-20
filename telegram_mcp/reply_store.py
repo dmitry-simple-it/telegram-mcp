@@ -24,6 +24,10 @@ class ReplyStore:
     def __init__(self, path=None):
         self.path = Path(path) if path is not None else default_db_path()
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        # Tighten only our application-owned default state directory, never an
+        # arbitrary caller-supplied parent such as /tmp or a shared workspace.
+        if path is None and not os.getenv("TELEGRAM_REPLY_DB"):
+            self.path.parent.chmod(0o700)
         if self.path.is_symlink():
             raise ValueError("Reply database must not be a symlink")
         fd = os.open(self.path, os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), 0o600)
