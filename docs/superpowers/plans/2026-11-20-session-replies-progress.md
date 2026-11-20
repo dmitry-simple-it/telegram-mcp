@@ -11,3 +11,5 @@ Task 3: complete for Codex — real Unix WebSocket tests; real current thread/so
 Ruling: native queue/add + queue/start replaces turn/start to close the busy TOCTOU with an atomic server idle check. Missing queue support fails registration rather than silently steering.
 Final review: fresh agent /root/reply_bridge_review. P1 duplicate-worker failure fixed by owned-state CAS and regression RED→GREEN. P2 busy TOCTOU fixed by native queue and regression RED→GREEN; cancellation cleanup tested RED→GREEN.
 Real Claude test: org policy blocks Channels. No policy changes; owner then explicitly deferred Claude.
+
+Final verification: 613 passed, 2 pre-existing warnings; local lint flags match project rules. No deferred material findings. Claude excluded from this release.
